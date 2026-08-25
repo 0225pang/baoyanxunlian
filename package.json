@@ -1,0 +1,31 @@
+{
+  "name": "yanlu-interview-trainer",
+  "version": "1.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "reset-password": "node scripts/reset-password.mjs"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.2",
+    "mysql2": "^3.24.2",
+    "next": "16.2.6",
+    "react": "19.2.6",
+    "react-dom": "19.2.6"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.19",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "eslint": "9.39.4",
+    "eslint-config-next": "16.2.6",
+    "typescript": "5.9.3"
+  },
+  "type": "module"
+}
