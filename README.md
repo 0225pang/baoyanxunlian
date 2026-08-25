@@ -10,7 +10,7 @@
 - 可在个人设置中配置倒计时结束后自动录音
 - 作答记录持久化，支持类别筛选、关键词搜索和录音回放
 - MySQL 初始化只在对应表不存在或表为空时写入默认数据，已有内容不会覆盖
-- Docker Compose + Caddy HTTP 反向代理（无域名时使用服务器 IP）
+- Docker Compose + Caddy HTTP 反向代理（无域名时使用服务器 IP:18080）
 
 ## 初始账号
 
@@ -58,8 +58,8 @@ npm run reset-password -- user 新密码
 
 ## 阿里云部署
 
-1. 使用服务器公网 IP 访问网站（当前为 HTTP）。
-2. 安全组只开放 22、80 端口，不开放 3306。
+1. 使用 `http://服务器公网IP:18080` 访问网站（当前为 HTTP）。
+2. 安全组开放 22、18080 端口，不开放 3306。
 3. 安装 Docker 和 Docker Compose。
 4. 复制 `.env.example` 为 `.env`，填写 MySQL 凭据。当前使用 IP + HTTP，`COOKIE_SECURE` 保持为 `false`。服务器上的应用容器不要填写本地 `33060`；应使用数据库所在服务器的内网地址和 3306，或配置 Docker 到宿主机 MySQL 的内部网络连接。
 5. 启动：

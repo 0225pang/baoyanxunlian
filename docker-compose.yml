@@ -14,7 +14,7 @@ services:
     depends_on:
       - app
     ports:
-      - "80:80"
+      - "18080:80"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
