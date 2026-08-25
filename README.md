@@ -65,14 +65,14 @@ npm run reset-password -- user 新密码
 5. 启动：
 
 ```bash
-docker compose up -d --build
+docker compose -p baoyanxunlian up -d --build --force-recreate
 ```
 
 以后更新代码：
 
 ```bash
 git pull
-docker compose up -d --build
+docker compose -p baoyanxunlian up -d --build --force-recreate
 ```
 
 数据库和录音都在 MySQL 中，重新构建容器不会丢失数据。生产环境建议使用 `mysqldump` 或阿里云 RDS/云数据库备份策略定期备份 `baoyanxunlian`。
