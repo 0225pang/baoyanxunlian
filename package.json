@@ -17,7 +17,8 @@
     "mysql2": "^3.24.2",
     "next": "16.2.6",
     "react": "19.2.6",
-    "react-dom": "19.2.6"
+    "react-dom": "19.2.6",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@emnapi/core": "^1.11.3",

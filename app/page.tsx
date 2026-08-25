@@ -2,17 +2,19 @@
 
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 
-type Category = '专业素养' | '英语能力' | '综合面试';
+type Category = '专业问题' | '英语问答问题' | '综合面试问题';
 type User = { id: number; username: string; displayName: string; role: 'admin' | 'student' };
 type ManagedUser = User & { status: 'pending' | 'active' | 'rejected' };
-type Question = { id: number; category: Category; content: string };
+type Question = { id: number; typeId: number; typeCode: string; category: Category; content: string; subcategory?: string | null; hasAnswer?: number };
+type QuestionType = { id: number; code: string; name: string; description: string | null; sortOrder?: number };
+type BankQuestion = { id: number; typeId: number; typeName: string; content: string; answer: string | null; subcategory: string | null; status: string; extra?: unknown };
 type RecordItem = { id: number; category: Category; question: string; answer: string; hasAudio: number; createdAt: string; username?: string; displayName?: string };
-type Page = 'home' | 'answer' | 'history' | 'settings' | 'users';
+type Page = 'home' | 'answer' | 'history' | 'settings' | 'users' | 'question-bank';
 
 const cards = [
-  { name: '专业素养' as Category, no: '01', en: 'ACADEMIC FOUNDATION', desc: '核心专业课、科研基础与学术思维', icon: '专', color: 'coral' },
-  { name: '英语能力' as Category, no: '02', en: 'ENGLISH PROFICIENCY', desc: '英文自我介绍、专业表达与即兴问答', icon: 'EN', color: 'blue' },
-  { name: '综合面试' as Category, no: '03', en: 'COMPREHENSIVE INTERVIEW', desc: '个人经历、热点观点与临场应变', icon: '综', color: 'green' },
+  { name: '专业问题' as Category, no: '01', en: 'ACADEMIC FOUNDATION', desc: '核心专业课、科研基础与学术思维', icon: '专', color: 'coral' },
+  { name: '英语问答问题' as Category, no: '02', en: 'ENGLISH PROFICIENCY', desc: '英文自我介绍、专业表达与即兴问答', icon: 'EN', color: 'blue' },
+  { name: '综合面试问题' as Category, no: '03', en: 'COMPREHENSIVE INTERVIEW', desc: '个人经历、热点观点与临场应变', icon: '综', color: 'green' },
 ];
 
 async function jsonFetch(url: string, options?: RequestInit) {
@@ -39,6 +41,7 @@ export default function Home() {
   const [autoRecord, setAutoRecord] = useState(true);
   const [recording, setRecording] = useState(false);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
+  const [referenceAnswer, setReferenceAnswer] = useState<string | null>(null);
   const [message, setMessage] = useState('');
   const recorder = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -83,6 +86,10 @@ export default function Home() {
     return () => window.clearTimeout(timer);
   }, [countdown, autoRecord, startRecording]);
 
+  useEffect(() => {
+    if (!audioBlob || !question?.hasAnswer) return;
+    void jsonFetch('/api/questions/' + question.id + '/answer').then((data) => setReferenceAnswer(data.answer || null)).catch(() => setReferenceAnswer(null));
+  }, [audioBlob, question]);
   async function login(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setMessage('');
     const form = new FormData(event.currentTarget);
@@ -103,7 +110,7 @@ export default function Home() {
     stopMedia(); setMessage('');
     try {
       const data = await jsonFetch(`/api/questions/random?category=${encodeURIComponent(category)}`);
-      setQuestion(data.question); setAnswer(''); setAudioBlob(null); setCountdown(3); setPage('answer'); window.scrollTo(0, 0);
+      setQuestion(data.question); setAnswer(''); setAudioBlob(null); setReferenceAnswer(null); setCountdown(3); setPage('answer'); window.scrollTo(0, 0);
     } catch (error) { setMessage((error as Error).message); }
   }
 
@@ -141,7 +148,7 @@ export default function Home() {
         <button className={page === 'home' || page === 'answer' ? 'active' : ''} onClick={() => setPage('home')}>题库训练</button>
         <button className={page === 'history' ? 'active' : ''} onClick={() => setPage('history')}>作答记录 <i>{records.length}</i></button>
         <button className={page === 'settings' ? 'active' : ''} onClick={() => setPage('settings')}>设置</button>
-        {user.role === 'admin' && <button className={page === 'users' ? 'active' : ''} onClick={() => setPage('users')}>用户管理</button>}
+        {user.role === 'admin' && <><button className={page === 'users' ? 'active' : ''} onClick={() => setPage('users')}>用户管理</button><button className={page === 'question-bank' ? 'active' : ''} onClick={() => setPage('question-bank')}>题库管理</button></>}
       </nav>
       <button className="user-chip" onClick={logout}>{user.displayName}<small>退出</small></button>
     </header>
@@ -153,13 +160,81 @@ export default function Home() {
       <section className="steps"><div><small>HOW IT WORKS</small><h2>四步完成一次高效练习</h2></div><ol><li><b>01</b>选择类别</li><li><b>02</b>3 秒准备</li><li><b>03</b>自动录音</li><li><b>04</b>复盘提升</li></ol></section>
     </main>}
 
-    {page === 'answer' && question && <main className="answer-page"><button className="back" onClick={() => { stopMedia(); setPage('home'); }}>← 返回题库</button><div className="answer-head"><div><small>{question.category}</small><h1>模拟作答</h1></div><button className="again" onClick={() => draw(question.category)}>↻ 换一题</button></div><section className="question"><small>INTERVIEW QUESTION</small><b>Q</b><h2>{question.content}</h2><p>回答提示：观点明确 · 结构清晰 · 结合具体经历或案例</p>{countdown !== null && <div className="countdown"><div key={countdown}>{countdown}</div><strong>准备开始</strong><small>倒计时结束后{autoRecord ? '将自动录音' : '开始作答'}</small></div>}</section><section className="response"><label>作答提纲 <small>选填</small></label><textarea disabled={countdown !== null} value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="记录你的回答框架、关键词或复盘笔记……" /><div className={`recorder ${recording ? 'on' : ''}`}><span><b>{recording ? '● 正在录音' : audioBlob ? '✓ 录音已完成' : '◉ 录制作答'}</b><small>{recording ? '请保持自然语速' : autoRecord ? '倒计时后自动开始，也可手动控制' : '自动录音已在设置中关闭'}</small></span><button disabled={countdown !== null} onClick={() => recording ? void stopRecording() : void startRecording()}>{recording ? '结束录音' : audioBlob ? '重新录制' : '开始录音'}</button></div></section><div className="actions"><button onClick={() => { stopMedia(); setPage('home'); }}>退出练习</button><button onClick={save} disabled={countdown !== null}>完成并保存记录 →</button></div></main>}
+    {page === 'answer' && question && <main className="answer-page"><button className="back" onClick={() => { stopMedia(); setPage('home'); }}>← 返回题库</button><div className="answer-head"><div><small>{question.category}</small><h1>模拟作答</h1></div><button className="again" onClick={() => draw(question.category)}>↻ 换一题</button></div><section className="question"><small>INTERVIEW QUESTION</small><b>Q</b><h2>{question.content}</h2>{question.subcategory && <span className="question-subcategory">{question.subcategory}</span>}<p>回答提示：观点明确 · 结构清晰 · 结合具体经历或案例</p>{countdown !== null && <div className="countdown"><div key={countdown}>{countdown}</div><strong>准备开始</strong><small>倒计时结束后{autoRecord ? '将自动录音' : '开始作答'}</small></div>}</section>{referenceAnswer && <section className="reference-answer"><span className="section-kicker">REFERENCE ANSWER</span><h3>参考答案</h3><p>{referenceAnswer}</p></section>}<section className="response"><label>作答提纲 <small>选填</small></label><textarea disabled={countdown !== null} value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="记录你的回答框架、关键词或复盘笔记……" /><div className={`recorder ${recording ? 'on' : ''}`}><span><b>{recording ? '● 正在录音' : audioBlob ? '✓ 录音已完成' : '◉ 录制作答'}</b><small>{recording ? '请保持自然语速' : autoRecord ? '倒计时后自动开始，也可手动控制' : '自动录音已在设置中关闭'}</small></span><button disabled={countdown !== null} onClick={() => recording ? void stopRecording() : void startRecording()}>{recording ? '结束录音' : audioBlob ? '重新录制' : '开始录音'}</button></div></section><div className="actions"><button onClick={() => { stopMedia(); setPage('home'); }}>退出练习</button><button onClick={save} disabled={countdown !== null}>完成并保存记录 →</button></div></main>}
 
     {page === 'history' && <History records={records} onFilter={loadRecords} onNew={() => setPage('home')} />}
     {page === 'settings' && <Settings autoRecord={autoRecord} onChange={setAutoRecord} />}
     {page === 'users' && user.role === 'admin' && <Users />}
+    {page === 'question-bank' && user.role === 'admin' && <QuestionBank />}
     <footer>研路 · 保研面试训练 <span>让准备看得见，让表达更从容。</span></footer>
   </div>;
+}
+
+
+function QuestionBank() {
+  const [types, setTypes] = useState<QuestionType[]>([]);
+  const [questions, setQuestions] = useState<BankQuestion[]>([]);
+  const [typeFilter, setTypeFilter] = useState('');
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [message, setMessage] = useState('');
+  const [editor, setEditor] = useState<{ id?: number; typeId: number; content: string; answer: string; subcategory: string; status: string } | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
+  const pageSize = 8;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  const loadTypes = useCallback(async () => {
+    const data = await jsonFetch('/api/question-types');
+    setTypes(data.types);
+  }, []);
+  const load = useCallback(async (targetPage = 1) => {
+    const params = new URLSearchParams({ page: String(targetPage), pageSize: String(pageSize) });
+    if (typeFilter) params.set('typeId', typeFilter);
+    if (search.trim()) params.set('q', search.trim());
+    const data = await jsonFetch('/api/question-bank?' + params.toString());
+    setQuestions(data.questions); setTotal(data.total); setPage(data.page);
+  }, [search, typeFilter]);
+  useEffect(() => { void loadTypes(); }, [loadTypes]);
+  useEffect(() => { void load(1); }, [load]);
+
+  function openCreate() {
+    setEditor({ typeId: Number(typeFilter || types[0]?.id || 0), content: '', answer: '', subcategory: '', status: 'active' });
+  }
+  function openEdit(item: BankQuestion) {
+    setEditor({ id: item.id, typeId: item.typeId, content: item.content, answer: item.answer || '', subcategory: item.subcategory || '', status: item.status });
+  }
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); if (!editor) return;
+    try {
+      await jsonFetch('/api/question-bank', { method: editor.id ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(editor) });
+      setEditor(null); setMessage('题目已保存'); await load(page);
+    } catch (error) { setMessage((error as Error).message); }
+  }
+  async function remove(id: number) {
+    if (!window.confirm('确定删除这道题目吗？已有作答记录会保留。')) return;
+    try {
+      await jsonFetch('/api/question-bank', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+      setMessage('题目已删除'); await load(page);
+    } catch (error) { setMessage((error as Error).message); }
+  }
+  async function importExcel(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); const form = new FormData(event.currentTarget);
+    try {
+      const result = await jsonFetch('/api/question-bank', { method: 'PUT', body: form });
+      setImportOpen(false); setMessage('已导入 ' + result.imported + ' 条题目' + (result.skipped ? '，跳过 ' + result.skipped + ' 行' : '')); await load(1);
+    } catch (error) { setMessage((error as Error).message); }
+  }
+
+  return <main className="panel-page bank-page">
+    <div className="users-heading"><div><p className="eyebrow">— QUESTION BANK</p><h1>题库管理</h1><p>按题型维护题目、答案和具体分类，也可以批量导入 Excel。</p></div><div className="bank-actions"><button className="secondary-action" onClick={() => setImportOpen(true)}>↑ 导入 Excel</button><button className="create-trigger" onClick={openCreate}>＋ 新增题目</button></div></div>
+    {message && <div className="management-message">{message}</div>}
+    <section className="bank-toolbar"><select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}><option value="">全部题型</option>{types.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</select><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索题目、答案或具体分类" /><button onClick={() => void load(1)}>筛选</button><span>共 {total} 道题目</span></section>
+    <section className="bank-list">{questions.length ? questions.map((item) => <article className="bank-item" key={item.id}><div className="bank-item-head"><div><span className="section-kicker">{item.typeName}</span><h2>{item.content}</h2></div><div className="bank-item-actions"><button onClick={() => openEdit(item)}>编辑</button><button className="danger-text" onClick={() => void remove(item.id)}>删除</button></div></div><div className="bank-meta">{item.subcategory && <span className="tag-chip">{item.subcategory}</span>}<span className={'question-status status-' + item.status}>{item.status === 'active' ? '启用' : item.status === 'draft' ? '草稿' : '归档'}</span>{item.answer ? <span className="answer-state has-answer">有参考答案</span> : <span className="answer-state">暂无参考答案</span>}</div>{item.answer && <p className="bank-answer">{item.answer}</p>}</article>) : <div className="empty"><b>题</b><h3>暂无题目</h3><p>可以新增题目，或导入整理好的 Excel。</p></div>}</section>
+    <div className="pagination"><button disabled={page <= 1} onClick={() => void load(page - 1)}>← 上一页</button><span>第 {page} / {totalPages} 页</span><button disabled={page >= totalPages} onClick={() => void load(page + 1)}>下一页 →</button></div>
+    {editor && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setEditor(null); }}><form className="create-modal bank-editor" onSubmit={save}><button type="button" className="modal-close" onClick={() => setEditor(null)}>×</button><span className="section-kicker">{editor.id ? 'EDIT QUESTION' : 'NEW QUESTION'}</span><h2>{editor.id ? '编辑题目' : '新增题目'}</h2><label>题目类型<select value={editor.typeId} onChange={(event) => setEditor({ ...editor, typeId: Number(event.target.value) })}>{types.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</select></label><label>题目内容<textarea required value={editor.content} onChange={(event) => setEditor({ ...editor, content: event.target.value })} /></label><label>参考答案（可选）<textarea value={editor.answer} onChange={(event) => setEditor({ ...editor, answer: event.target.value })} /></label><label>具体分类（可选）<input value={editor.subcategory} onChange={(event) => setEditor({ ...editor, subcategory: event.target.value })} placeholder="例如：食品化学" /></label><label>状态<select value={editor.status} onChange={(event) => setEditor({ ...editor, status: event.target.value })}><option value="active">启用</option><option value="draft">草稿</option><option value="archived">归档</option></select></label><button className="modal-submit">保存题目</button></form></div>}
+    {importOpen && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setImportOpen(false); }}><form className="create-modal import-modal" onSubmit={importExcel}><button type="button" className="modal-close" onClick={() => setImportOpen(false)}>×</button><span className="section-kicker">EXCEL IMPORT</span><h2>导入题库 Excel</h2><p>Excel 需要包含“题目内容”列；“参考答案”“具体分类”“来源”“备注”均可选。</p><label>导入到题型<select name="typeId" defaultValue={typeFilter || types[0]?.id || ''} required>{types.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</select></label><label>Excel 文件<input name="file" type="file" accept=".xlsx,.xls,.csv" required /></label><button className="modal-submit">开始导入</button></form></div>}
+  </main>;
 }
 
 function Login({ onSubmit, message }: { onSubmit: (event: FormEvent<HTMLFormElement>) => void; message: string }) {

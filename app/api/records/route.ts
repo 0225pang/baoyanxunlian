@@ -31,7 +31,7 @@ export async function POST(request: Request) {
     const category = String(data.get('category') || '');
     const question = String(data.get('question') || '').trim();
     const answer = String(data.get('answer') || '').trim() || '本次为口述作答，未填写文字提纲。';
-    if (!questionId || !['专业素养', '英语能力', '综合面试'].includes(category) || !question) return Response.json({ error: '作答数据不完整' }, { status: 400 });
+    if (!questionId || !['专业问题', '英语问答问题', '综合面试问题', '专业素养', '英语能力', '综合面试'].includes(category) || !question) return Response.json({ error: '作答数据不完整' }, { status: 400 });
 
     const audio = data.get('audio');
     let audioData: Buffer | null = null;
