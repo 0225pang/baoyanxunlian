@@ -17,6 +17,11 @@ function parseExtra(value: unknown) {
   try { return JSON.stringify(JSON.parse(String(value))); } catch { return JSON.stringify({ note: String(value) }); }
 }
 
+// Deduplicate questions by content only. Type and metadata are intentionally ignored.
+async function questionIdWithContent(content: string, excludeId?: number) {
+  const rows = await query('SELECT id FROM questions WHERE content = ?' + (excludeId ? ' AND id <> ?' : '') + ' LIMIT 1', excludeId ? [content, excludeId] : [content]);
+  return rows.length ? Number((rows[0] as { id: number }).id) : null;
+}
 async function ensureAdmin() {
   const user = await requireUser();
   if (user.role !== 'admin') throw new Error('FORBIDDEN');
@@ -61,6 +66,7 @@ export async function POST(request: Request) {
     const content = String(data.content || '').trim();
     if (!Number.isInteger(typeId) || !content) return Response.json({ error: '题型和题目内容不能为空' }, { status: 400 });
     if (!(await typeExists(typeId))) return Response.json({ error: '题型不存在或已停用' }, { status: 400 });
+    if (await questionIdWithContent(content)) return Response.json({ error: '\u9898\u76ee\u5185\u5bb9\u5df2\u5b58\u5728\uff0c\u672a\u91cd\u590d\u6dfb\u52a0' }, { status: 409 });
     const result = await execute('INSERT INTO questions (type_id, content, answer, subcategory, extra, status) VALUES (?, ?, ?, ?, ?, ?)', [
       typeId, content, String(data.answer || '').trim() || null, String(data.subcategory || '').trim() || null, parseExtra(data.extra), ['active', 'draft', 'archived'].includes(String(data.status)) ? String(data.status) : 'active',
     ]);
@@ -77,6 +83,7 @@ export async function PATCH(request: Request) {
     const content = String(data.content || '').trim();
     if (!Number.isInteger(id) || !Number.isInteger(typeId) || !content) return Response.json({ error: '题目参数不完整' }, { status: 400 });
     if (!(await typeExists(typeId))) return Response.json({ error: '题型不存在或已停用' }, { status: 400 });
+    if (await questionIdWithContent(content, id)) return Response.json({ error: '\u9898\u76ee\u5185\u5bb9\u5df2\u5b58\u5728\uff0c\u672a\u4fdd\u5b58\u91cd\u590d\u9898\u76ee' }, { status: 409 });
     const result = await execute('UPDATE questions SET type_id = ?, content = ?, answer = ?, subcategory = ?, extra = ?, status = ? WHERE id = ?', [
       typeId, content, String(data.answer || '').trim() || null, String(data.subcategory || '').trim() || null, parseExtra(data.extra), ['active', 'draft', 'archived'].includes(String(data.status)) ? String(data.status) : 'active', id,
     ]);
@@ -124,14 +131,20 @@ export async function PUT(request: Request) {
       return key ? String(row[key] ?? '').trim() : '';
     };
     let imported = 0; let skipped = 0; const errors: string[] = [];
+    const importedContents = new Set<string>();
     for (let index = 0; index < rows.length; index += 1) {
       const row = rows[index]; const content = valueOf(row, aliases.content);
       if (!content) { skipped += 1; continue; }
+      if (importedContents.has(content) || await questionIdWithContent(content)) {
+        skipped += 1;
+        continue;
+      }
       const answer = valueOf(row, aliases.answer); const subcategory = valueOf(row, aliases.subcategory);
       const source = valueOf(row, aliases.source); const notes = valueOf(row, aliases.notes);
       const extra = source || notes ? JSON.stringify({ ...(source ? { source } : {}), ...(notes ? { notes } : {}) }) : null;
       try {
         await execute('INSERT INTO questions (type_id, content, answer, subcategory, extra, status) VALUES (?, ?, ?, ?, ?, ?)', [typeId, content, answer || null, subcategory || null, extra, 'active']);
+        importedContents.add(content);
         imported += 1;
       } catch (error) { errors.push(`第 ${index + 2} 行：${String(error)}`); }
     }

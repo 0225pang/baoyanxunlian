@@ -195,6 +195,12 @@ export async function getDb() {
       charset: 'utf8mb4',
       timezone: '+08:00',
     });
+    // MySQL evaluates CURRENT_TIMESTAMP using the connection session timezone.
+    // Set it for every pooled connection so DATETIME defaults are Beijing time,
+    // even when the MySQL server itself runs in UTC.
+    pool.on('connection', (connection) => {
+      void connection.query("SET time_zone = '+08:00'").catch(() => undefined);
+    });
   }
   initialized ??= initializeDatabase(pool);
   await initialized;
