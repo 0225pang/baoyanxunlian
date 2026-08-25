@@ -13,9 +13,6 @@ services:
       - app
     ports:
       - "80:80"
-      - "443:443"
-    environment:
-      SITE_DOMAIN: ${SITE_DOMAIN}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
