@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",
+    "fix-webm-duration": "^1.0.6",
     "mysql2": "^3.24.2",
     "next": "16.2.6",
     "react": "19.2.6",

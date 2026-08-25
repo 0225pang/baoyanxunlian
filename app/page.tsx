@@ -1,8 +1,10 @@
 'use client';
 
+import fixWebmDuration from 'fix-webm-duration';
+
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 
-type Category = '专业问题' | '英语问答问题' | '综合面试问题';
+type Category = string;
 type User = { id: number; username: string; displayName: string; role: 'admin' | 'student' };
 type ManagedUser = User & { status: 'pending' | 'active' | 'rejected' };
 type Question = { id: number; typeId: number; typeCode: string; category: Category; content: string; subcategory?: string | null; hasAnswer?: number };
@@ -12,11 +14,8 @@ type RecordItem = { id: number; userId: number; questionId: number | null; categ
 type RecordGroup = { key: string; userId: number; questionId: number | null; category: Category; question: string; username?: string; attempts: RecordItem[] };
 type Page = 'home' | 'answer' | 'history' | 'settings' | 'users' | 'question-bank';
 
-const cards = [
-  { name: '专业问题' as Category, no: '01', en: 'ACADEMIC FOUNDATION', desc: '核心专业课、科研基础与学术思维', icon: '专', color: 'coral' },
-  { name: '英语问答问题' as Category, no: '02', en: 'ENGLISH PROFICIENCY', desc: '英文自我介绍、专业表达与即兴问答', icon: 'EN', color: 'blue' },
-  { name: '综合面试问题' as Category, no: '03', en: 'COMPREHENSIVE INTERVIEW', desc: '个人经历、热点观点与临场应变', icon: '综', color: 'green' },
-];
+type HomeCard = QuestionType & { no: string; en: string; desc: string; icon: string; color: string };
+const cardColors = ['coral', 'blue', 'green'];
 
 async function jsonFetch(url: string, options?: RequestInit) {
   const response = await fetch(url, options);
@@ -36,6 +35,7 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState<Page>('home');
   const [question, setQuestion] = useState<Question | null>(null);
+  const [questionTypes, setQuestionTypes] = useState<QuestionType[]>([]);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [answer, setAnswer] = useState('');
   const [records, setRecords] = useState<RecordItem[]>([]);
@@ -44,11 +44,13 @@ export default function Home() {
   const [recording, setRecording] = useState(false);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [referenceAnswer, setReferenceAnswer] = useState<string | null>(null);
+  const homeCards: HomeCard[] = questionTypes.map((type, index) => ({ ...type, no: String(index + 1).padStart(2, '0'), en: type.code.toUpperCase(), desc: type.description || '暂无介绍', icon: type.name.slice(0, 1), color: cardColors[index % cardColors.length] }));
   const [message, setMessage] = useState('');
   const recorder = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunks = useRef<Blob[]>([]);
   const stopResolver = useRef<((blob: Blob | null) => void) | null>(null);
+  const recordingStartedAt = useRef<number | null>(null);
 
   const startRecording = useCallback(async () => {
     if (recorder.current?.state === 'recording') return;
@@ -57,12 +59,14 @@ export default function Home() {
       const mediaRecorder = new MediaRecorder(stream);
       chunks.current = []; streamRef.current = stream;
       mediaRecorder.ondataavailable = (event) => { if (event.data.size) chunks.current.push(event.data); };
-      mediaRecorder.onstop = () => {
-        const blob = chunks.current.length ? new Blob(chunks.current, { type: mediaRecorder.mimeType || 'audio/webm' }) : null;
+      mediaRecorder.onstop = async () => {
+        const rawBlob = chunks.current.length ? new Blob(chunks.current, { type: mediaRecorder.mimeType || 'audio/webm' }) : null;
+        const elapsed = recordingStartedAt.current ? Math.max(0, Date.now() - recordingStartedAt.current) : 0;
+        const blob = rawBlob && elapsed > 0 ? await fixWebmDuration(rawBlob, elapsed, { logger: false }) : rawBlob;
         setAudioBlob(blob); setRecording(false); stream.getTracks().forEach((track) => track.stop());
         stopResolver.current?.(blob); stopResolver.current = null;
       };
-      mediaRecorder.start(); recorder.current = mediaRecorder; setRecording(true);
+      recordingStartedAt.current = Date.now(); mediaRecorder.start(); recorder.current = mediaRecorder; setRecording(true);
     } catch { setMessage('无法使用麦克风，请在浏览器地址栏允许录音权限。'); }
   }, []);
 
@@ -72,8 +76,8 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    Promise.all([jsonFetch('/api/auth/me'), jsonFetch('/api/settings')])
-      .then(([me, settings]) => { setUser(me.user); setAutoRecord(settings.settings.autoRecord); setAvoidRepeated(Boolean(settings.settings.avoidRepeated)); return loadRecords(); })
+    Promise.all([jsonFetch('/api/auth/me'), jsonFetch('/api/settings'), jsonFetch('/api/question-types')])
+      .then(([me, settings, typeData]) => { setUser(me.user); setAutoRecord(settings.settings.autoRecord); setAvoidRepeated(Boolean(settings.settings.avoidRepeated)); setQuestionTypes(typeData.types); return loadRecords(); })
       .catch(() => setUser(null)).finally(() => setLoading(false));
   }, [loadRecords]);
 
@@ -98,7 +102,7 @@ export default function Home() {
     try {
       const data = await jsonFetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: form.get('username'), password: form.get('password') }) });
       setUser(data.user);
-      const settings = await jsonFetch('/api/settings'); setAutoRecord(settings.settings.autoRecord); setAvoidRepeated(Boolean(settings.settings.avoidRepeated));
+      const settings = await jsonFetch('/api/settings'); setAutoRecord(settings.settings.autoRecord); setAvoidRepeated(Boolean(settings.settings.avoidRepeated)); const typeData = await jsonFetch('/api/question-types'); setQuestionTypes(typeData.types);
       await loadRecords();
     } catch (error) { setMessage((error as Error).message); }
   }
@@ -108,10 +112,10 @@ export default function Home() {
     setUser(null); setRecords([]); setPage('home');
   }
 
-  async function draw(category: Category) {
+  async function draw(typeId: number) {
     stopMedia(); setMessage('');
     try {
-      const data = await jsonFetch(`/api/questions/random?category=${encodeURIComponent(category)}`);
+      const data = await jsonFetch('/api/questions/random?typeId=' + encodeURIComponent(String(typeId)));
       setQuestion(data.question); setAnswer(''); setAudioBlob(null); setReferenceAnswer(null); setCountdown(3); setPage('answer'); window.scrollTo(0, 0);
     } catch (error) { setMessage((error as Error).message); }
   }
@@ -158,13 +162,13 @@ export default function Home() {
 
     {page === 'home' && <main>
       <section className="hero"><div><p className="eyebrow">— 推免面试 · 模拟训练</p><h1>把每一次开口，<br />都练成<span>底气。</span></h1><p className="lead">从随机抽题到限时作答，提前适应真实面试节奏。<br />录音和练习记录安全保存在服务器。</p></div><aside><span>累计训练</span><strong>{String(records.length).padStart(2, '0')}</strong><small>次个人作答</small><div><i style={{ width: `${Math.min(records.length / 3 * 100, 100)}%` }} /></div><p>建议完成 3 道不同类别题目</p></aside></section>
-      <section className="choose"><div className="title"><div><small>CHOOSE YOUR TOPIC</small><h2>选择一个训练类别</h2></div><span>三类题库 · 随机抽取 · 持久记录</span></div><div className="cards">{cards.map((card) => <article className={card.color} key={card.name}><div className="cardtop"><span>{card.no}</span><small>随机抽取</small></div><b className="symbol">{card.icon}</b><small className="en">{card.en}</small><h3>{card.name}</h3><p>{card.desc}</p><button onClick={() => draw(card.name)}>开始抽题 <span>→</span></button></article>)}</div></section>
+      <section className="choose"><div className="title"><div><small>CHOOSE YOUR TOPIC</small><h2>选择一个训练类别</h2></div><span>数据库题型 · 随机抽取 · 持久记录</span></div><div className="cards">{homeCards.map((card) => <article className={card.color} key={card.id}><div className="cardtop"><span>{card.no}</span><small>随机抽取</small></div><b className="symbol">{card.icon}</b><small className="en">{card.en}</small><h3>{card.name}</h3><p>{card.desc}</p><button onClick={() => draw(card.id)}>开始抽题 <span>→</span></button></article>)}</div></section>
       <section className="steps"><div><small>HOW IT WORKS</small><h2>四步完成一次高效练习</h2></div><ol><li><b>01</b>选择类别</li><li><b>02</b>3 秒准备</li><li><b>03</b>自动录音</li><li><b>04</b>复盘提升</li></ol></section>
     </main>}
 
-    {page === 'answer' && question && <main className="answer-page"><button className="back" onClick={() => { stopMedia(); setPage('home'); }}>← 返回题库</button><div className="answer-head"><div><small>{question.category}</small><h1>模拟作答</h1></div><button className="again" onClick={() => draw(question.category)}>↻ 换一题</button></div><section className="question"><small>INTERVIEW QUESTION</small><b>Q</b><h2>{question.content}</h2>{question.subcategory && <span className="question-subcategory">{question.subcategory}</span>}<p>回答提示：观点明确 · 结构清晰 · 结合具体经历或案例</p>{countdown !== null && <div className="countdown"><div key={countdown}>{countdown}</div><strong>准备开始</strong><small>倒计时结束后{autoRecord ? '将自动录音' : '开始作答'}</small></div>}</section>{referenceAnswer && <section className="reference-answer"><span className="section-kicker">REFERENCE ANSWER</span><h3>参考答案</h3><p>{referenceAnswer}</p></section>}<section className="response"><label>作答提纲 <small>选填</small></label><textarea disabled={countdown !== null} value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="记录你的回答框架、关键词或复盘笔记……" /><div className={`recorder ${recording ? 'on' : ''}`}><span><b>{recording ? '● 正在录音' : audioBlob ? '✓ 录音已完成' : '◉ 录制作答'}</b><small>{recording ? '请保持自然语速' : autoRecord ? '倒计时后自动开始，也可手动控制' : '自动录音已在设置中关闭'}</small></span><button disabled={countdown !== null} onClick={() => recording ? void stopRecording() : void startRecording()}>{recording ? '结束录音' : audioBlob ? '重新录制' : '开始录音'}</button></div></section><div className="actions"><button onClick={() => { stopMedia(); setPage('home'); }}>退出练习</button><button onClick={save} disabled={countdown !== null}>完成并保存记录 →</button></div></main>}
+    {page === 'answer' && question && <main className="answer-page"><button className="back" onClick={() => { stopMedia(); setPage('home'); }}>← 返回题库</button><div className="answer-head"><div><small>{question.category}</small><h1>模拟作答</h1></div><button className="again" onClick={() => draw(question.typeId)}>↻ 换一题</button></div><section className="question"><small>INTERVIEW QUESTION</small><b>Q</b><h2>{question.content}</h2>{question.subcategory && <span className="question-subcategory">{question.subcategory}</span>}<p>回答提示：观点明确 · 结构清晰 · 结合具体经历或案例</p>{countdown !== null && <div className="countdown"><div key={countdown}>{countdown}</div><strong>准备开始</strong><small>倒计时结束后{autoRecord ? '将自动录音' : '开始作答'}</small></div>}</section>{referenceAnswer && <section className="reference-answer"><span className="section-kicker">REFERENCE ANSWER</span><h3>参考答案</h3><p>{referenceAnswer}</p></section>}<section className="response"><label>作答提纲 <small>选填</small></label><textarea disabled={countdown !== null} value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="记录你的回答框架、关键词或复盘笔记……" /><div className={`recorder ${recording ? 'on' : ''}`}><span><b>{recording ? '● 正在录音' : audioBlob ? '✓ 录音已完成' : '◉ 录制作答'}</b><small>{recording ? '请保持自然语速' : autoRecord ? '倒计时后自动开始，也可手动控制' : '自动录音已在设置中关闭'}</small></span><button disabled={countdown !== null} onClick={() => recording ? void stopRecording() : void startRecording()}>{recording ? '结束录音' : audioBlob ? '重新录制' : '开始录音'}</button></div></section><div className="actions"><button onClick={() => { stopMedia(); setPage('home'); }}>退出练习</button><button onClick={save} disabled={countdown !== null}>完成并保存记录 →</button></div></main>}
 
-    {page === 'history' && <History records={records} onFilter={loadRecords} onNew={() => setPage('home')} />}
+    {page === 'history' && <History records={records} cards={homeCards} onFilter={loadRecords} onNew={() => setPage('home')} />}
     {page === 'settings' && <Settings autoRecord={autoRecord} avoidRepeated={avoidRepeated} onChange={(value, repeated) => { setAutoRecord(value); setAvoidRepeated(repeated); }} />}
     {page === 'users' && user.role === 'admin' && <Users />}
     {page === 'question-bank' && user.role === 'admin' && <QuestionBank />}
@@ -264,7 +268,7 @@ function Login({ onSubmit, message }: { onSubmit: (event: FormEvent<HTMLFormElem
   return <div className="login-shell"><form className="login-card" onSubmit={registering ? register : onSubmit}><b className="login-mark">研</b><small>YANLU INTERVIEW TRAINER</small><h1>{registering ? '申请注册' : '欢迎回来'}</h1><p>{registering ? '提交后需管理员审核通过才能登录' : '登录后开始你的保研面试训练'}</p>{registering && <label>姓名<input name="displayName" autoComplete="name" required /></label>}<label>账号<input name="username" autoComplete="username" required /></label><label>密码<input name="password" type="password" minLength={registering ? 8 : undefined} autoComplete={registering ? 'new-password' : 'current-password'} required /></label>{(registering ? registerMessage : message) && <div className={registerMessage.includes('已提交') ? 'form-success' : 'form-error'}>{registering ? registerMessage : message}</div>}<button type="submit">{registering ? '提交注册申请 →' : '登录系统 →'}</button><button type="button" className="login-switch" onClick={() => { setRegistering(!registering); setRegisterMessage(''); }}>{registering ? '已有账号？返回登录' : '没有账号？申请注册'}</button></form></div>;
 }
 
-function History({ records, onFilter, onNew }: { records: RecordItem[]; onFilter: (category?: string, search?: string) => Promise<void>; onNew: () => void }) {
+function History({ records, cards, onFilter, onNew }: { records: RecordItem[]; cards: HomeCard[]; onFilter: (category?: string, search?: string) => Promise<void>; onNew: () => void }) {
   const [category, setCategory] = useState('');
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);

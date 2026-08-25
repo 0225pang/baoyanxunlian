@@ -31,3 +31,9 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     return new Response(chunk as unknown as BodyInit, { status: 206, headers: { ...commonHeaders, 'Content-Length': String(chunk.length), 'Content-Range': `bytes ${start}-${end}/${size}` } });
   } catch (error) { return apiError(error); }
 }
+
+
+export async function HEAD(request: Request, context: { params: Promise<{ id: string }> }) {
+  const response = await GET(request, context);
+  return new Response(null, { status: response.status, headers: response.headers });
+}
