@@ -40,6 +40,7 @@ export async function destroySession() {
 
 export function apiError(error: unknown) {
   if (error instanceof Error && error.message === 'UNAUTHORIZED') return Response.json({ error: '请先登录' }, { status: 401 });
+  if (error instanceof Error && error.message === 'FORBIDDEN') return Response.json({ error: '无权访问' }, { status: 403 });
   console.error(error);
   return Response.json({ error: '服务器处理失败' }, { status: 500 });
 }

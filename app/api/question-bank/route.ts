@@ -19,7 +19,7 @@ function parseExtra(value: unknown) {
 
 async function ensureAdmin() {
   const user = await requireUser();
-  if (user.role !== 'admin') throw new Error('无权访问');
+  if (user.role !== 'admin') throw new Error('FORBIDDEN');
   return user;
 }
 
