@@ -199,7 +199,8 @@ export async function getDb() {
     // Set it for every pooled connection so DATETIME defaults are Beijing time,
     // even when the MySQL server itself runs in UTC.
     pool.on('connection', (connection) => {
-      void connection.query("SET time_zone = '+08:00'").catch(() => undefined);
+      const promiseConnection = (connection as unknown as { promise: () => { query: (sql: string) => Promise<unknown> } }).promise();
+      void promiseConnection.query("SET time_zone = '+08:00'").catch(() => undefined);
     });
   }
   initialized ??= initializeDatabase(pool);
