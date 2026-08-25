@@ -11,14 +11,14 @@ export async function GET(request: Request) {
     const values: unknown[] = [];
     if (user.role !== 'admin') values.push(user.id);
     values.push(category, category, search, `%${search}%`, `%${search}%`);
-    const records = await query(`SELECT r.id, r.category, r.question, r.answer,
+    const records = await query(`SELECT r.id, r.user_id AS userId, r.question_id AS questionId, r.category, r.question, r.answer,
       r.audio_data IS NOT NULL AS hasAudio, DATE_FORMAT(r.created_at, '%Y-%m-%dT%H:%i:%s') AS createdAt,
       u.username AS username, u.display_name AS displayName
       FROM practice_records r JOIN users u ON u.id = r.user_id
       WHERE 1 = 1 ${ownerFilter}
         AND (? = '' OR r.category = ?)
         AND (? = '' OR r.question LIKE ? OR r.answer LIKE ?)
-      ORDER BY r.created_at DESC, r.id DESC LIMIT 200`, values);
+      ORDER BY r.created_at DESC, r.id DESC`, values);
     return Response.json({ records });
   } catch (error) { return apiError(error); }
 }

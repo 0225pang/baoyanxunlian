@@ -63,6 +63,7 @@ const schema = [
   `CREATE TABLE IF NOT EXISTS user_settings (
     user_id BIGINT UNSIGNED NOT NULL PRIMARY KEY,
     auto_record TINYINT(1) NOT NULL DEFAULT 1,
+    avoid_repeated TINYINT(1) NOT NULL DEFAULT 0,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     CONSTRAINT fk_settings_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
@@ -137,6 +138,9 @@ async function initializeDatabase(db: Pool) {
   for (const statement of schema) await db.query(statement);
   await db.query("ALTER TABLE users MODIFY COLUMN status ENUM('pending', 'active', 'rejected', 'deleted') NOT NULL DEFAULT 'active'");
   await ensureQuestionColumns(db);
+  if (!(await hasColumn(db, 'user_settings', 'avoid_repeated'))) {
+    await db.query('ALTER TABLE user_settings ADD COLUMN avoid_repeated TINYINT(1) NOT NULL DEFAULT 0');
+  }
 
   // Seed mock questions only for a completely empty question bank. Existing
   // question types or questions are preserved and never receive extra rows.

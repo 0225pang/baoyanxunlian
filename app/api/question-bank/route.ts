@@ -88,12 +88,14 @@ export async function PATCH(request: Request) {
 export async function DELETE(request: Request) {
   try {
     await ensureAdmin();
-    const data = await request.json() as { id?: number };
-    const id = Number(data.id);
-    if (!Number.isInteger(id)) return Response.json({ error: '题目编号无效' }, { status: 400 });
-    const result = await execute('DELETE FROM questions WHERE id = ?', [id]);
-    if (!result.affectedRows) return Response.json({ error: '题目不存在' }, { status: 404 });
-    return Response.json({ ok: true });
+    const data = await request.json() as { id?: number; ids?: number[] };
+    const ids = Array.from(new Set((Array.isArray(data.ids) ? data.ids : [data.id])
+      .map((value) => Number(value))
+      .filter((value) => Number.isInteger(value) && value > 0)));
+    if (!ids.length) return Response.json({ error: '请选择要删除的题目' }, { status: 400 });
+    const placeholders = ids.map(() => '?').join(', ');
+    const result = await execute('DELETE FROM questions WHERE id IN (' + placeholders + ')', ids);
+    return Response.json({ ok: true, deleted: Number(result.affectedRows) });
   } catch (error) { return apiError(error); }
 }
 
