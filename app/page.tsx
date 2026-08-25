@@ -179,8 +179,32 @@ function History({ records, onFilter, onNew }: { records: RecordItem[]; onFilter
 
 function Settings({ autoRecord, onChange }: { autoRecord: boolean; onChange: (value: boolean) => void }) {
   const [saved, setSaved] = useState('');
+  const [guideOpen, setGuideOpen] = useState(false);
+  const [origin, setOrigin] = useState('');
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => { setOrigin(window.location.origin); }, []);
+  useEffect(() => {
+    if (!guideOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setGuideOpen(false); };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [guideOpen]);
+
   async function update(value: boolean) { await jsonFetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ autoRecord: value }) }); onChange(value); setSaved('设置已保存'); }
-  return <main className="panel-page"><p className="eyebrow">— PERSONAL SETTINGS</p><h1>系统设置</h1><section className="setting-card"><div><h2>题目显示后自动录音</h2><p>开启后，3 秒准备倒计时结束时自动请求麦克风并开始录制。</p></div><button className={`switch ${autoRecord ? 'on' : ''}`} onClick={() => void update(!autoRecord)} aria-label="切换自动录音"><i /></button></section>{saved && <p className="saved">✓ {saved}</p>}<div className="security-note"><b>数据存储说明</b><p>账号、题库、设置、作答记录和录音都保存在服务器 MySQL 数据库中。</p></div></main>;
+  async function copyOrigin() {
+    if (!origin) return;
+    try {
+      await navigator.clipboard.writeText(origin);
+    } catch {
+      const input = document.createElement('textarea');
+      input.value = origin; input.style.position = 'fixed'; input.style.opacity = '0';
+      document.body.appendChild(input); input.select(); document.execCommand('copy'); input.remove();
+    }
+    setCopied(true); window.setTimeout(() => setCopied(false), 2200);
+  }
+
+  return <main className="panel-page"><p className="eyebrow">— PERSONAL SETTINGS</p><h1>系统设置</h1><section className="setting-card"><div><h2>题目显示后自动录音</h2><p>开启后，3 秒准备倒计时结束时自动请求麦克风并开始录制。</p></div><button className={`switch ${autoRecord ? 'on' : ''}`} onClick={() => void update(!autoRecord)} aria-label="切换自动录音"><i /></button></section>{saved && <p className="saved">✓ {saved}</p>}<section className="permission-card"><div><span className="section-kicker">BROWSER PERMISSION</span><h2>HTTP 环境录音权限</h2><p>当前使用 IP + HTTP 时，浏览器默认不会开放麦克风。打开配置指引，可复制当前网址并快速进入 Chrome / Edge 的安全设置。</p></div><button className="permission-guide-trigger" onClick={() => setGuideOpen(true)}>查看配置指引 <span>→</span></button></section><div className="security-note"><b>数据存储说明</b><p>账号、题库、设置、作答记录和录音都保存在服务器 MySQL 数据库中。</p></div>{guideOpen && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setGuideOpen(false); }}><div className="permission-modal" role="dialog" aria-modal="true" aria-labelledby="permission-guide-title"><button type="button" className="modal-close" aria-label="关闭录音权限指引" onClick={() => setGuideOpen(false)}>×</button><span className="section-kicker">MICROPHONE ACCESS</span><h2 id="permission-guide-title">开启 HTTP 录音权限</h2><p className="permission-intro">网页不能直接修改浏览器实验性开关，但可以帮你准备好要加入白名单的地址。</p><ol className="permission-steps"><li><b>01</b><div><strong>复制当前网址</strong><small>将下面的地址加入浏览器的安全来源列表。</small></div></li><li><b>02</b><div><strong>打开浏览器实验设置</strong><small>Chrome 或 Edge 中搜索 <code>unsafely-treat-insecure-origin-as-secure</code>。</small></div></li><li><b>03</b><div><strong>启用并重启浏览器</strong><small>把地址粘贴到白名单后，将开关设为 Enabled，再重启浏览器。</small></div></li></ol><div className="permission-origin"><code>{origin || '正在读取当前网址…'}</code><button type="button" onClick={() => void copyOrigin()} disabled={!origin}>{copied ? '已复制' : '复制地址'}</button></div><div className="permission-links"><a href="chrome://flags/#unsafely-treat-insecure-origin-as-secure" target="_blank" rel="noreferrer">打开 Chrome 设置</a><a href="edge://flags/#unsafely-treat-insecure-origin-as-secure" target="_blank" rel="noreferrer">打开 Edge 设置</a></div><p className="permission-warning">提示：这是浏览器临时兼容方案，仅建议本机开发使用。正式上线请使用 HTTPS。</p></div></div>}</main>;
 }
 
 function Users() {
