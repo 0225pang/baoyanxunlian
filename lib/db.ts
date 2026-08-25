@@ -100,6 +100,10 @@ async function hasIndex(db: Pool, table: string, index: string) {
 }
 
 async function ensureQuestionColumns(db: Pool) {
+  // Remove the legacy index before dropping category/enabled during migration.
+  if (await hasIndex(db, 'questions', 'idx_questions_category_enabled')) {
+    await db.query('ALTER TABLE questions DROP INDEX idx_questions_category_enabled');
+  }
   const columns: Array<[string, string]> = [
     ['type_id', 'INT UNSIGNED NULL'],
     ['answer', 'LONGTEXT NULL'],
@@ -125,11 +129,20 @@ async function migrateLegacyQuestions(db: Pool) {
   }
   await db.query("UPDATE questions SET type_id = (SELECT id FROM question_types WHERE code = 'professional') WHERE type_id IS NULL");
   if (await hasColumn(db, 'questions', 'enabled')) await db.query("UPDATE questions SET status = CASE WHEN enabled = 1 THEN 'active' ELSE 'archived' END");
+  // The current table uses type_id/status; remove legacy category/enabled once migrated.
+  if (await hasColumn(db, 'questions', 'category')) await db.query("ALTER TABLE questions DROP COLUMN category");
+  if (await hasColumn(db, 'questions', 'enabled')) await db.query("ALTER TABLE questions DROP COLUMN enabled");
 }
 async function initializeDatabase(db: Pool) {
   for (const statement of schema) await db.query(statement);
   await db.query("ALTER TABLE users MODIFY COLUMN status ENUM('pending', 'active', 'rejected', 'deleted') NOT NULL DEFAULT 'active'");
   await ensureQuestionColumns(db);
+
+  // Seed mock questions only for a completely empty question bank. Existing
+  // question types or questions are preserved and never receive extra rows.
+  const [existingTypeRows] = await db.query<RowDataPacket[]>('SELECT COUNT(*) AS count FROM question_types');
+  const [existingQuestionRows] = await db.query<RowDataPacket[]>('SELECT COUNT(*) AS count FROM questions');
+  const seedQuestionBank = Number(existingTypeRows[0].count) === 0 && Number(existingQuestionRows[0].count) === 0;
 
   const [userRows] = await db.query<RowDataPacket[]>('SELECT COUNT(*) AS count FROM users');
   if (Number(userRows[0].count) === 0) {
@@ -141,21 +154,20 @@ async function initializeDatabase(db: Pool) {
     ]);
   }
 
-  for (const type of questionTypes) {
-    await db.query(
-      `INSERT INTO question_types (code, name, description, settings, sort_order, is_active) VALUES (?, ?, ?, ?, ?, 1)
-       ON DUPLICATE KEY UPDATE name = VALUES(name), description = VALUES(description), sort_order = VALUES(sort_order), is_active = 1`,
-      [type.code, type.name, type.description, JSON.stringify({ countdownSeconds: 3, autoRecord: true, answerReveal: 'after_recording' }), type.sortOrder],
-    );
+  // Type definitions are initialized only for an empty type table.
+  // Existing names/descriptions remain managed by the database.
+  if (Number(existingTypeRows[0].count) === 0) {
+    for (const type of questionTypes) {
+      await db.query(
+        'INSERT INTO question_types (code, name, description, settings, sort_order, is_active) VALUES (?, ?, ?, ?, ?, 1)',
+        [type.code, type.name, type.description, JSON.stringify({ countdownSeconds: 3, autoRecord: true, answerReveal: 'after_recording' }), type.sortOrder],
+      );
+    }
   }
   await migrateLegacyQuestions(db);
 
-  for (const mock of mockQuestions) {
-    const [existing] = await db.query<RowDataPacket[]>(
-      'SELECT q.id FROM questions q JOIN question_types t ON t.id = q.type_id WHERE t.code = ? AND q.content = ? LIMIT 1',
-      [mock.code, mock.content],
-    );
-    if (!existing.length) {
+  if (seedQuestionBank) {
+    for (const mock of mockQuestions) {
       const [typeRows] = await db.query<RowDataPacket[]>('SELECT id FROM question_types WHERE code = ? LIMIT 1', [mock.code]);
       await db.query('INSERT INTO questions (type_id, content, answer, subcategory, extra, status) VALUES (?, ?, ?, ?, ?, ?)', [
         typeRows[0].id, mock.content, mock.answer, mock.subcategory, JSON.stringify({ source: '系统 mock 数据' }), 'active',
