@@ -116,3 +116,17 @@
 @media(max-width:520px){.bank-toolbar{grid-template-columns:1fr}.bank-actions{width:100%}.bank-actions button{flex:1}.bank-item{padding:19px}.reference-answer{padding:19px}}
 
 .bulk-toolbar{display:flex;align-items:center;gap:16px;background:#f1f4f0;border:1px solid var(--line);padding:10px 14px;margin:-8px 0 14px;font-size:12px}.bulk-toolbar label{display:flex;align-items:center;gap:7px;font-weight:700}.bulk-toolbar span{color:var(--muted)}.bulk-toolbar button{margin-left:auto;background:none;border:0}.question-check{display:flex;align-items:flex-start;padding-top:4px}.bank-item-head{display:grid;grid-template-columns:22px 1fr auto;gap:12px}.page-jump{display:flex;align-items:center;gap:5px;margin-left:10px}.page-jump input{width:54px;border:1px solid var(--line);background:#fff;padding:8px;text-align:center}.page-jump button{border:1px solid var(--line);background:#fff;padding:8px 10px}.record-group details{margin-top:14px;border-top:1px solid var(--line);padding-top:10px}.record-group summary{cursor:pointer;color:#3f7569;font-size:12px;font-weight:700}.attempt-list{display:grid;gap:10px;margin-top:10px}.attempt{background:#f5f7f4;padding:12px 14px}.attempt p{margin:6px 0;color:#697772;font-size:13px}.attempt audio{width:min(420px,100%);height:32px}@media(max-width:800px){.page-jump{margin-left:0}.pagination{flex-wrap:wrap}.bulk-toolbar{flex-wrap:wrap}.bulk-toolbar button{margin-left:0}.bank-item-head{grid-template-columns:22px 1fr}.bank-item-actions{grid-column:2}}
+/* Brand logo */
+.logo{gap:14px}
+.logo-image{display:block;width:226px;height:auto;flex:none}
+.logo-training{border-left:1px solid var(--line);padding-left:14px;min-height:34px;justify-content:center}
+.logo-training strong{font-size:14px;letter-spacing:2px;white-space:nowrap}
+.logo-training small{font-size:9px;letter-spacing:1px;color:var(--muted);margin-top:3px}
+footer>span:first-child{color:var(--ink);font-weight:700}
+@media(max-width:800px){
+  .logo-image{width:178px}
+  .logo-training{display:none}
+}
+@media(max-width:480px){
+  .logo-image{width:165px}
+}

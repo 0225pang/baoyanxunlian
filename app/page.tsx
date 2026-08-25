@@ -149,7 +149,7 @@ export default function Home() {
 
   return <div className="app">
     <header>
-      <button className="logo" onClick={() => setPage('home')}><b>研</b><span><strong>研路</strong><small>保研面试训练</small></span></button>
+      <button className="logo" onClick={() => setPage('home')}><img className="logo-image" src="/logo.svg" alt="小鱼食品保研" /><span className="logo-training"><strong>保研面试训练</strong><small>INTERVIEW TRAINING</small></span></button>
       <nav>
         <button className={page === 'home' || page === 'answer' ? 'active' : ''} onClick={() => setPage('home')}>题库训练</button>
         <button className={page === 'history' ? 'active' : ''} onClick={() => setPage('history')}>作答记录 <i>{records.length}</i></button>
@@ -172,7 +172,7 @@ export default function Home() {
     {page === 'settings' && <Settings autoRecord={autoRecord} avoidRepeated={avoidRepeated} onChange={(value, repeated) => { setAutoRecord(value); setAvoidRepeated(repeated); }} />}
     {page === 'users' && user.role === 'admin' && <Users />}
     {page === 'question-bank' && user.role === 'admin' && <QuestionBank />}
-    <footer>研路 · 保研面试训练 <span>让准备看得见，让表达更从容。</span></footer>
+    <footer><span>小鱼食品保研 · 保研面试训练</span><span>让准备看得见，让表达更从容。</span></footer>
   </div>;
 }
 
