@@ -101,6 +101,17 @@ const schema = [
     auto_transcribe TINYINT(1) NOT NULL DEFAULT 0,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE TABLE IF NOT EXISTS asr_settings (
+    id TINYINT UNSIGNED NOT NULL PRIMARY KEY,
+    provider VARCHAR(50) NOT NULL DEFAULT 'bailian',
+    submit_url VARCHAR(500) NOT NULL,
+    task_url VARCHAR(500) NOT NULL,
+    model VARCHAR(150) NOT NULL DEFAULT 'paraformer-v1',
+    api_key TEXT NULL,
+    public_base_url VARCHAR(500) NULL,
+    token_secret TEXT NULL,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS ai_model_configs (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
@@ -291,6 +302,25 @@ async function initializeDatabase(db: Pool) {
         'https://dashscope.aliyuncs.com/compatible-mode/v1',
         'qwen3.8-27b',
         '你是一名资深的食品专业保研面试评估老师，熟悉食品科学与工程、食品质量与安全等方向的笔试和面试要求。\n请根据题目类型、题目内容以及学员最近最多三次回答，客观、具体、可执行地评估学员表现。重点找出回答中的问题和改进方向，同时肯定做得好的地方。\n请关注：专业知识准确性、回答结构、论据与案例、表达清晰度、逻辑连贯性、英语表达（如果是英语题）、思考停顿与回答节奏（如果提供了带时间戳的文字切片）。\n请使用简洁的 Markdown 输出，包含：总体评价、做得好的地方、主要问题、下一步改进建议、参考回答框架、与前几次相比的进步或退步。不要编造学员没有提供的经历或事实。',
+      ],
+    );
+  }
+
+  // ASR is deliberately stored separately from the chat/evaluation model.
+  // Environment variables are only used once to bootstrap a new deployment.
+  const [asrSettingRows] = await db.query<RowDataPacket[]>('SELECT COUNT(*) AS count FROM asr_settings');
+  if (Number(asrSettingRows[0].count) === 0) {
+    const submitUrl = (process.env.DASHSCOPE_ASR_URL || 'https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription').trim();
+    let taskUrl = 'https://dashscope.aliyuncs.com/api/v1/tasks';
+    try { taskUrl = new URL(submitUrl).origin + '/api/v1/tasks'; } catch { /* keep default */ }
+    await db.query(
+      'INSERT INTO asr_settings (id, provider, submit_url, task_url, model, api_key, public_base_url, token_secret) VALUES (1, ?, ?, ?, ?, ?, ?, ?)',
+      [
+        'bailian', submitUrl, (process.env.DASHSCOPE_TASK_URL || taskUrl).trim().replace(/\/+$/, ''),
+        (process.env.DASHSCOPE_ASR_MODEL || 'paraformer-v1').trim(),
+        process.env.DASHSCOPE_API_KEY || process.env.BAILIAN_API_KEY || process.env.SILICONFLOW_API_KEY || null,
+        (process.env.ASR_PUBLIC_BASE_URL || '').trim().replace(/\/+$/, '') || null,
+        process.env.ASR_AUDIO_TOKEN_SECRET || process.env.DASHSCOPE_API_KEY || process.env.BAILIAN_API_KEY || process.env.SILICONFLOW_API_KEY || null,
       ],
     );
   }

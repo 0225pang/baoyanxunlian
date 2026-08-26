@@ -87,7 +87,7 @@ export async function GET(request: Request) {
     const evaluations = await query(`SELECT id, status, result, error, DATE_FORMAT(created_at, '%Y-%m-%dT%H:%i:%s') AS createdAt, DATE_FORMAT(completed_at, '%Y-%m-%dT%H:%i:%s') AS completedAt
       FROM ai_evaluations WHERE user_id = ? AND question_id = ? ORDER BY id DESC`, [userId, questionId]);
     const messages = await query(`SELECT id, role, content, evaluation_id AS evaluationId, DATE_FORMAT(created_at, '%Y-%m-%dT%H:%i:%s') AS createdAt
-      FROM ai_messages WHERE user_id = ? AND question_id = ? AND role <> 'system' ORDER BY id ASC`, [userId, questionId]);
+      FROM ai_messages WHERE user_id = ? AND question_id = ? AND evaluation_id IS NULL ORDER BY id ASC`, [userId, questionId]);
     return Response.json({ evaluations, messages, userId, questionId });
   } catch (error) { return apiError(error); }
 }

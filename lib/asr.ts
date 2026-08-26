@@ -1,4 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { query } from './db';
+import type { RowDataPacket } from 'mysql2/promise';
 
 export type AsrConfig = {
   key: string;
@@ -13,7 +15,7 @@ function cleanSecret(value: string) {
   return value.trim().replace(/^['"]|['"]$/g, '').replace(/^(?:Bearer\s+|(?:siliconflow|dashscope)_api\s*=\s*|api[_-]?key\s*=\s*)/i, '').trim();
 }
 
-export function getAsrConfig(): AsrConfig {
+function environmentConfig(): AsrConfig {
   // Keep the old variable as a migration fallback, but all new deployments
   // should use DASHSCOPE_API_KEY.
   const rawKey = process.env.DASHSCOPE_API_KEY
@@ -37,6 +39,23 @@ export function getAsrConfig(): AsrConfig {
     taskUrl: (process.env.DASHSCOPE_TASK_URL || defaultTaskUrl).trim().replace(/\/+$/, ''),
     publicBaseUrl: (process.env.ASR_PUBLIC_BASE_URL || '').trim().replace(/\/+$/, ''),
     tokenSecret: cleanSecret(process.env.ASR_AUDIO_TOKEN_SECRET || key),
+  };
+}
+
+export async function getAsrConfig(): Promise<AsrConfig> {
+  const fallback = environmentConfig();
+  const rows = await query<RowDataPacket[]>(`SELECT provider, submit_url AS submitUrl, task_url AS taskUrl, model,
+      api_key AS apiKey, public_base_url AS publicBaseUrl, token_secret AS tokenSecret
+      FROM asr_settings WHERE id = 1 LIMIT 1`);
+  const row = rows[0];
+  if (!row) return fallback;
+  return {
+    key: cleanSecret(String(row.apiKey || fallback.key)),
+    model: String(row.model || fallback.model).trim(),
+    submitUrl: String(row.submitUrl || fallback.submitUrl).trim(),
+    taskUrl: String(row.taskUrl || fallback.taskUrl).trim().replace(/\/+$/, ''),
+    publicBaseUrl: String(row.publicBaseUrl || fallback.publicBaseUrl).trim().replace(/\/+$/, ''),
+    tokenSecret: cleanSecret(String(row.tokenSecret || fallback.tokenSecret)),
   };
 }
 

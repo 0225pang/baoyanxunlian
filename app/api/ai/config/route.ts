@@ -11,6 +11,15 @@ type ModelRow = RowDataPacket & {
   apiKey: string | null;
 };
 type PromptRow = RowDataPacket & { id: number; name: string; content: string };
+type AsrRow = RowDataPacket & {
+  provider: string;
+  submitUrl: string;
+  taskUrl: string;
+  model: string;
+  apiKey: string | null;
+  publicBaseUrl: string | null;
+  tokenSecret: string | null;
+};
 
 function modelToClient(row: ModelRow) {
   const key = row.apiKey || '';
@@ -29,6 +38,25 @@ function promptToClient(row: PromptRow) {
   return { id: Number(row.id), name: row.name, content: row.content };
 }
 
+function secretPreview(value: string | null) {
+  const secret = String(value || '');
+  return secret ? secret.slice(0, 4) + '••••••••' + secret.slice(-4) : '';
+}
+
+function asrToClient(row: AsrRow) {
+  return {
+    provider: row.provider,
+    submitUrl: row.submitUrl,
+    taskUrl: row.taskUrl,
+    model: row.model,
+    publicBaseUrl: row.publicBaseUrl || '',
+    apiKeySet: Boolean(row.apiKey),
+    apiKeyPreview: secretPreview(row.apiKey),
+    tokenSecretSet: Boolean(row.tokenSecret),
+    tokenSecretPreview: secretPreview(row.tokenSecret),
+  };
+}
+
 async function requireAdmin() {
   const user = await requireUser();
   if (user.role !== 'admin') throw new Error('FORBIDDEN');
@@ -39,6 +67,7 @@ async function readState() {
   const settings = await query<RowDataPacket[]>('SELECT active_config_id AS activeConfigId, active_prompt_id AS activePromptId, auto_transcribe AS autoTranscribe FROM ai_settings WHERE id = 1 LIMIT 1');
   const configs = await query<ModelRow[]>('SELECT id, name, provider, base_url AS baseUrl, model, api_key AS apiKey FROM ai_model_configs ORDER BY id ASC');
   const prompts = await query<PromptRow[]>('SELECT id, name, content FROM ai_prompts ORDER BY id ASC');
+  const asrRows = await query<AsrRow[]>('SELECT provider, submit_url AS submitUrl, task_url AS taskUrl, model, api_key AS apiKey, public_base_url AS publicBaseUrl, token_secret AS tokenSecret FROM asr_settings WHERE id = 1 LIMIT 1');
   const activeConfigId = Number(settings[0]?.activeConfigId || configs[0]?.id || 0);
   const activePromptId = Number(settings[0]?.activePromptId || prompts[0]?.id || 0);
   return {
@@ -47,6 +76,7 @@ async function readState() {
     activeConfigId,
     activePromptId,
     autoTranscribe: Boolean(settings[0]?.autoTranscribe),
+    asrConfig: asrRows[0] ? asrToClient(asrRows[0]) : null,
   };
 }
 
@@ -66,6 +96,7 @@ export async function PATCH(request: Request) {
       autoTranscribe?: boolean;
       config?: { id?: number; name?: string; provider?: string; baseUrl?: string; model?: string; apiKey?: string };
       prompt?: { id?: number; name?: string; content?: string };
+      asrConfig?: { provider?: string; submitUrl?: string; taskUrl?: string; model?: string; apiKey?: string; publicBaseUrl?: string; tokenSecret?: string };
       deleteConfigId?: number;
       deletePromptId?: number;
     };
@@ -113,6 +144,26 @@ export async function PATCH(request: Request) {
       } else {
         const result = await execute('INSERT INTO ai_prompts (name, content) VALUES (?, ?)', [name, content]);
         promptId = Number(result.insertId);
+      }
+    }
+
+    if (body.asrConfig) {
+      const provider = String(body.asrConfig.provider || 'bailian').trim().slice(0, 50);
+      const submitUrl = String(body.asrConfig.submitUrl || '').trim().replace(/\/+$/, '');
+      const taskUrl = String(body.asrConfig.taskUrl || '').trim().replace(/\/+$/, '');
+      const model = String(body.asrConfig.model || '').trim().slice(0, 150);
+      const publicBaseUrl = String(body.asrConfig.publicBaseUrl || '').trim().replace(/\/+$/, '');
+      const apiKey = String(body.asrConfig.apiKey || '').trim();
+      const tokenSecret = String(body.asrConfig.tokenSecret || '').trim();
+      if (!provider || !submitUrl || !taskUrl || !model) return Response.json({ error: '转写配置的平台、提交地址、任务地址和模型名称不能为空' }, { status: 400 });
+      if (apiKey && tokenSecret) {
+        await execute('UPDATE asr_settings SET provider = ?, submit_url = ?, task_url = ?, model = ?, api_key = ?, public_base_url = ?, token_secret = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1', [provider, submitUrl, taskUrl, model, apiKey, publicBaseUrl || null, tokenSecret]);
+      } else if (apiKey) {
+        await execute('UPDATE asr_settings SET provider = ?, submit_url = ?, task_url = ?, model = ?, api_key = ?, public_base_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1', [provider, submitUrl, taskUrl, model, apiKey, publicBaseUrl || null]);
+      } else if (tokenSecret) {
+        await execute('UPDATE asr_settings SET provider = ?, submit_url = ?, task_url = ?, model = ?, public_base_url = ?, token_secret = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1', [provider, submitUrl, taskUrl, model, publicBaseUrl || null, tokenSecret]);
+      } else {
+        await execute('UPDATE asr_settings SET provider = ?, submit_url = ?, task_url = ?, model = ?, public_base_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1', [provider, submitUrl, taskUrl, model, publicBaseUrl || null]);
       }
     }
 

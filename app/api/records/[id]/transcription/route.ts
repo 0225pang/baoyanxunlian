@@ -39,7 +39,7 @@ function readJson(raw: string): unknown {
 
 async function transcribeInBackground(id: number, audioUrl: string) {
   try {
-    const config = getAsrConfig();
+    const config = await getAsrConfig();
     const submitResponse = await fetch(config.submitUrl, {
       method: 'POST',
       headers: {
@@ -129,7 +129,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     }
     if (!row.audio_data) return Response.json({ error: '这条记录没有录音' }, { status: 400 });
 
-    const config = getAsrConfig();
+    const config = await getAsrConfig();
     if (!config.key) return Response.json({ error: '尚未配置百炼 DASHSCOPE_API_KEY' }, { status: 503 });
     if (!config.tokenSecret) return Response.json({ error: '尚未配置 ASR_AUDIO_TOKEN_SECRET' }, { status: 503 });
     if (row.transcript_status === 'processing') {

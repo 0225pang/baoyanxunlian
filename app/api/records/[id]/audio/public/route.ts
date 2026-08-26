@@ -14,7 +14,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     const { id: rawId } = await context.params;
     const id = Number(rawId);
     const token = new URL(request.url).searchParams.get('token') || '';
-    const config = getAsrConfig();
+    const config = await getAsrConfig();
 
     if (!Number.isInteger(id) || id <= 0 || !verifyAudioToken(token, id, config.tokenSecret)) {
       return new Response('Not found', { status: 404 });

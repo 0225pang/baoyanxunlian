@@ -61,7 +61,7 @@ function formatTranscriptTime(milliseconds: number) {
 }
 
 function markdownInline(value: string): ReactNode[] {
-  return value.split(/(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^\)]+\))/g).filter(Boolean).map((part, index) => {
+  return value.split(/(\*\*[\s\S]+?\*\*|`[^`]+`|\[[^\]]+\]\([^\)]+\))/g).filter(Boolean).map((part, index) => {
     if (part.startsWith('**') && part.endsWith('**')) return <strong key={index}>{part.slice(2, -2)}</strong>;
     if (part.startsWith('`') && part.endsWith('`')) return <code key={index}>{part.slice(1, -1)}</code>;
     const link = part.match(/^\[([^\]]+)\]\(([^\)]+)\)$/);
@@ -102,8 +102,13 @@ function MarkdownContent({ value, className = '' }: { value: string; className?:
     }
     if (code) { code.push(line); return; }
     if (!line.trim()) { flushParagraph(); flushList(); return; }
+    if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      flushParagraph(); flushList(); blocks.push(<hr key={'hr-' + blocks.length} />); return;
+    }
     const heading = line.match(/^(#{1,3})\s+(.+)$/);
     if (heading) { flushParagraph(); flushList(); blocks.push(<h3 key={'h-' + blocks.length} data-level={heading[1].length}>{markdownInline(heading[2])}</h3>); return; }
+    const boldOnly = line.trim().match(/^\*\*([\s\S]+?)\*\*$/);
+    if (boldOnly) { flushParagraph(); flushList(); blocks.push(<h4 key={'h4-' + blocks.length}>{markdownInline(boldOnly[1])}</h4>); return; }
     const bullet = line.match(/^\s*[-*+]\s+(.+)$/);
     const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
     if (bullet || ordered) {
@@ -644,20 +649,22 @@ function ReviewPage({ group, autoTranscribe, onBack }: { group: RecordGroup; aut
   }
 
   const completed = evaluations.find((item) => item.status === 'completed');
-  const visibleMessages = messages.filter((item) => !(item.role === 'user' && item.content.startsWith('请评估以下食品专业保研面试练习数据')));
   return <main className="review-page">
-    <div className="review-topbar"><button className="back" onClick={onBack}>← 返回作答记录</button><span className="review-user">{group.username ? '学员：' + group.username : '我的复盘'}</span></div>
-    <header className="review-header"><div><p className="eyebrow">— AI PRACTICE REVIEW</p><h1>复盘这道题</h1><p>把最近最多三次回答放在一起，查看变化、问题和下一步练习方向。</p></div><button className="review-generate" disabled={!questionId || generating} onClick={() => void generate()}>{generating ? '提交中…' : completed ? '检查新回答并评估' : '生成 AI 评估'} <span>→</span></button></header>
+    <header className="review-hero">
+      <div className="review-topbar"><button className="review-back" onClick={onBack} aria-label="返回作答记录">返回作答记录</button><span className="review-user">{group.username ? '学员：' + group.username : '我的复盘'}</span></div>
+      <div className="review-hero-content"><div><p className="eyebrow">AI PRACTICE REVIEW</p><h1>把一次作答，练成一次进步</h1><p>围绕同一道题梳理表达、录音转写与 AI 反馈；最近三次作答会共同作为分析依据。</p></div><button className="review-generate" disabled={!questionId || generating} onClick={() => void generate()}>{generating ? '正在提交…' : completed ? '检查新回答并评估' : '生成 AI 评估'}</button></div>
+      <div className="review-stats" aria-label="本题训练概览"><span><b>{group.attempts.length}</b>次作答</span><span><b>{evaluations.length}</b>次评估</span><span><b>{latest.hasReferenceAnswer ? '有' : '无'}</b>参考答案</span></div>
+    </header>
     {message && <div className="management-message">{message}</div>}
     {!questionId ? <div className="empty"><h3>原题目已经不存在</h3><p>这条记录缺少题目编号，暂时无法建立独立的 AI 对话。</p></div> : <div className="review-grid">
       <section className="review-main">
-        <div className="review-question-card"><span className="section-kicker">QUESTION</span><h2>{group.question}</h2><div className="review-question-meta"><span>{group.category}</span><span>{group.attempts.length} 次作答</span><span>{latest.hasReferenceAnswer ? '有参考答案' : '暂无参考答案'}</span></div></div>
+        <div className="review-question-card"><span className="section-kicker">INTERVIEW QUESTION</span><h2>{group.question}</h2><div className="review-question-meta"><span>{group.category}</span><span>{group.attempts.length} 次作答</span><span>{latest.hasReferenceAnswer ? '有参考答案' : '暂无参考答案'}</span></div></div>
         <section className="review-section"><div className="review-section-title"><div><span className="section-kicker">RECENT ATTEMPTS</span><h2>最近的回答</h2></div><small>按时间倒序，最多取 3 次</small></div>{group.attempts.slice(0, 3).map((item, index) => {
           return <article className="review-attempt" key={item.id}><div className="review-attempt-head"><strong>第 {group.attempts.length - index} 次</strong><small>{formatRecordDate(item.createdAt)}</small></div><p className="review-answer">{item.answer || '本次没有填写文字作答。'}</p>{item.hasAudio && <TranscriptViewer item={item} autoTranscribe={autoTranscribe} onTranscribe={() => void transcribeAttempt(item)} />}</article>;
         })}</section>
-        <section className="review-section"><div className="review-section-title"><div><span className="section-kicker">EVALUATIONS</span><h2>评估结果</h2></div><small>{loading ? '正在读取…' : evaluations.length + ' 次评估'}</small></div>{evaluations.length ? evaluations.map((item, index) => <article className="evaluation-card" key={item.id}><div className="evaluation-card-head"><strong>{index === 0 ? '最新评估' : '历史评估 ' + (evaluations.length - index)}</strong><small>{formatRecordDate(item.createdAt)} · {item.status === 'processing' ? '生成中' : item.status === 'completed' ? '已完成' : '失败'}</small></div>{item.status === 'processing' && <p className="evaluation-pending">AI 正在分析最近的回答，请稍候，页面会自动刷新。</p>}{item.status === 'failed' && <p className="evaluation-error">{item.error || '本次评估失败。'}</p>}{item.status === 'completed' && <MarkdownContent value={item.result || ''} className="evaluation-result" />}</article>) : <div className="review-empty">还没有评估，点击右上角按钮生成第一次评估。</div>}</section>
       </section>
-      <aside className="review-side"><div className="review-side-head"><span className="section-kicker">COACH CHAT</span><h2>继续和教练对话</h2><p>对话只属于这个学员和这道题，会记住之前的评估与追问。</p></div><div className="chat-messages">{visibleMessages.length ? visibleMessages.map((item) => <div className={'chat-message ' + item.role} key={item.id}><span>{item.role === 'assistant' ? 'AI 教练' : '你'}</span><MarkdownContent value={item.content} /></div>) : <div className="chat-empty">生成评估后，可以继续追问“如何改进这道题的回答？”</div>}</div><form className="chat-form" onSubmit={sendChat}><textarea value={chatInput} onChange={(event) => setChatInput(event.target.value)} placeholder="例如：请把我的回答改成 90 秒的结构化版本。" disabled={!completed || chatLoading} /><button disabled={!completed || chatLoading || !chatInput.trim()}>{chatLoading ? '发送中…' : '发送消息'}</button></form></aside>
+      <section className="review-evaluations review-section"><div className="review-section-title"><div><span className="section-kicker">EVALUATIONS</span><h2>评估结果</h2></div><small>{loading ? '正在读取…' : evaluations.length + ' 次评估'}</small></div>{evaluations.length ? evaluations.map((item, index) => <details className="evaluation-card" key={item.id} open={index === 0}><summary><span><strong>{index === 0 ? '最新评估' : '历史评估 ' + (evaluations.length - index)}</strong><small>{formatRecordDate(item.createdAt)}</small></span><em>{item.status === 'processing' ? '生成中' : item.status === 'completed' ? '已完成' : '失败'}</em></summary>{item.status === 'processing' && <p className="evaluation-pending">AI 正在分析最近的回答，请稍候，页面会自动刷新。</p>}{item.status === 'failed' && <p className="evaluation-error">{item.error || '本次评估失败。'}</p>}{item.status === 'completed' && <MarkdownContent value={item.result || ''} className="evaluation-result" />}</details>) : <div className="review-empty">还没有评估。生成评估后，这里会保留每一次可展开查看的反馈。</div>}</section>
+      <aside className="review-side"><div className="review-side-head"><span className="section-kicker">COACH CHAT</span><h2>和 AI 教练继续练</h2><p>这里只显示你和教练的对话。题目与最近作答会作为对话背景提供给 AI。</p></div><div className="chat-messages">{messages.length ? messages.map((item) => <div className={'chat-message ' + item.role} key={item.id}><span>{item.role === 'assistant' ? 'AI 教练' : '你'}</span><MarkdownContent value={item.content} /></div>) : <div className="chat-empty">还没有对话。你可以直接请教练帮你优化这道题的回答。</div>}</div><form className="chat-form" onSubmit={sendChat}><textarea value={chatInput} onChange={(event) => setChatInput(event.target.value)} placeholder="例如：请把我的回答改成 90 秒的结构化版本。" disabled={chatLoading} /><button disabled={chatLoading || !chatInput.trim()}>{chatLoading ? '发送中…' : '发送消息'}</button></form></aside>
     </div>}
   </main>;
 }
@@ -669,7 +676,8 @@ function Management() {
 
 type AiModelConfig = { id: number; name: string; provider: string; baseUrl: string; model: string; apiKeySet: boolean; apiKeyPreview: string; apiKey?: string };
 type AiPrompt = { id: number; name: string; content: string };
-type AiConfigState = { configs: AiModelConfig[]; prompts: AiPrompt[]; activeConfigId: number; activePromptId: number; autoTranscribe: boolean };
+type AsrConfigClient = { provider: string; submitUrl: string; taskUrl: string; model: string; publicBaseUrl: string; apiKeySet: boolean; apiKeyPreview: string; tokenSecretSet: boolean; tokenSecretPreview: string; apiKey?: string; tokenSecret?: string };
+type AiConfigState = { configs: AiModelConfig[]; prompts: AiPrompt[]; activeConfigId: number; activePromptId: number; autoTranscribe: boolean; asrConfig: AsrConfigClient | null };
 
 const providerDefaults: Record<string, string> = {
   bailian: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
@@ -686,15 +694,16 @@ const modelPresets: Record<string, string[]> = {
 };
 
 function AiConfig() {
-  const [state, setState] = useState<AiConfigState>({ configs: [], prompts: [], activeConfigId: 0, activePromptId: 0, autoTranscribe: false });
+  const [state, setState] = useState<AiConfigState>({ configs: [], prompts: [], activeConfigId: 0, activePromptId: 0, autoTranscribe: false, asrConfig: null });
   const [editingModel, setEditingModel] = useState<(AiModelConfig & { apiKey?: string }) | null>(null);
   const [editingPrompt, setEditingPrompt] = useState<AiPrompt | null>(null);
+  const [asrDraft, setAsrDraft] = useState<AsrConfigClient | null>(null);
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
-    try { setState(await jsonFetch('/api/ai/config')); }
+    try { const data = await jsonFetch('/api/ai/config'); setState(data); setAsrDraft(data.asrConfig); }
     catch (error) { setMessage((error as Error).message); }
     finally { setLoading(false); }
   }, []);
@@ -744,6 +753,15 @@ function AiConfig() {
       setState(data); setMessage(data.autoTranscribe ? '已开启保存录音后的自动转写' : '已关闭自动转写，学员可手动生成文字稿');
     } catch (error) { setMessage((error as Error).message); }
   }
+  async function saveAsr(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); if (!asrDraft) return;
+    setSaving(true); setMessage('');
+    try {
+      const data = await jsonFetch('/api/ai/config', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ activeConfigId: state.activeConfigId, activePromptId: state.activePromptId, autoTranscribe: state.autoTranscribe, asrConfig: asrDraft }) });
+      setState(data); setAsrDraft(data.asrConfig); setMessage('录音转文字 API 配置已保存');
+    } catch (error) { setMessage((error as Error).message); }
+    finally { setSaving(false); }
+  }
   async function removeModel(id: number) {
     if (!window.confirm('确定删除这个模型配置吗？')) return;
     try { const data = await jsonFetch('/api/ai/config', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deleteConfigId: id, activeConfigId: state.activeConfigId, activePromptId: state.activePromptId, autoTranscribe: state.autoTranscribe }) }); setState(data); setMessage('模型配置已删除'); }
@@ -772,6 +790,19 @@ function AiConfig() {
         {editingPrompt && <form className="ai-editor" onSubmit={savePrompt}><div className="ai-editor-title"><strong>{editingPrompt.id ? '编辑提示词' : '新增提示词'}</strong><button type="button" onClick={() => setEditingPrompt(null)}>取消</button></div><label>提示词名称<input required value={editingPrompt.name} onChange={(event) => setEditingPrompt({ ...editingPrompt, name: event.target.value })} placeholder="例如：食品专业面试评估" /></label><label>提示词内容<textarea required value={editingPrompt.content} onChange={(event) => setEditingPrompt({ ...editingPrompt, content: event.target.value })} placeholder="写清楚角色、输入内容、评价维度和输出格式。" /></label><button className="modal-submit" disabled={saving}>{saving ? '保存中…' : '保存并启用提示词'}</button></form>}
       </section>
     </div>
+    <section className="ai-panel ai-asr-panel"><div className="ai-panel-head"><div><span className="section-kicker">ASR CONFIGURATION</span><h3>录音转文字 API</h3></div><small>与 AI 对话模型完全独立</small></div>
+      <p className="ai-panel-note">用于录音自动转写。密钥仅保存在服务器；更换 ASR 平台、模型或公网音频地址时，只需要在这里修改。</p>
+      {asrDraft ? <form className="asr-editor" onSubmit={saveAsr}>
+        <label>服务平台<select value={asrDraft.provider} onChange={(event) => setAsrDraft({ ...asrDraft, provider: event.target.value })}><option value="bailian">阿里云百炼</option><option value="custom">自定义兼容接口</option></select></label>
+        <label>转写模型<input required value={asrDraft.model} onChange={(event) => setAsrDraft({ ...asrDraft, model: event.target.value })} placeholder="paraformer-v1" /></label>
+        <label>提交接口地址<input required type="url" value={asrDraft.submitUrl} onChange={(event) => setAsrDraft({ ...asrDraft, submitUrl: event.target.value })} /></label>
+        <label>任务查询地址<input required type="url" value={asrDraft.taskUrl} onChange={(event) => setAsrDraft({ ...asrDraft, taskUrl: event.target.value })} /></label>
+        <label>公网音频地址<input type="url" value={asrDraft.publicBaseUrl} onChange={(event) => setAsrDraft({ ...asrDraft, publicBaseUrl: event.target.value })} placeholder="例如：http://服务器IP:18080" /></label>
+        <label>ASR API Key {asrDraft.apiKeySet && <small className="key-preview">当前：{asrDraft.apiKeyPreview}（留空不修改）</small>}<input type="password" value={asrDraft.apiKey || ''} onChange={(event) => setAsrDraft({ ...asrDraft, apiKey: event.target.value })} placeholder={asrDraft.apiKeySet ? '留空保持当前 Key' : '粘贴录音转写 API Key'} autoComplete="off" /></label>
+        <label>音频临时链接密钥 {asrDraft.tokenSecretSet && <small className="key-preview">已设置（留空不修改）</small>}<input type="password" value={asrDraft.tokenSecret || ''} onChange={(event) => setAsrDraft({ ...asrDraft, tokenSecret: event.target.value })} placeholder="用于保护上传录音的临时访问链接" autoComplete="off" /></label>
+        <button className="modal-submit" disabled={saving}>{saving ? '保存中…' : '保存录音转文字配置'}</button>
+      </form> : <div className="review-empty">正在读取录音转文字配置…</div>}
+    </section>
     <section className="ai-automation"><div><span className="section-kicker">AUDIO PIPELINE</span><h3>录音后自动转写</h3><p>开启后，学员保存带录音的回答时，系统会自动提交百炼 Paraformer 转写；页面不再显示手动生成按钮。</p></div><button type="button" className={state.autoTranscribe ? 'switch on' : 'switch'} onClick={() => void toggleAutoTranscribe()} aria-label="切换自动转写"><i /></button></section>
   </section>;
 }
