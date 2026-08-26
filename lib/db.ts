@@ -77,6 +77,11 @@ const schema = [
     audio_data LONGBLOB NULL,
     audio_mime VARCHAR(100) NULL,
     audio_size INT UNSIGNED NULL,
+    transcript LONGTEXT NULL,
+    transcript_status VARCHAR(20) NOT NULL DEFAULT 'none',
+    transcript_error TEXT NULL,
+    transcript_started_at DATETIME NULL,
+    transcribed_at DATETIME NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_records_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     INDEX idx_records_user_created (user_id, created_at),
@@ -134,10 +139,23 @@ async function migrateLegacyQuestions(db: Pool) {
   if (await hasColumn(db, 'questions', 'category')) await db.query("ALTER TABLE questions DROP COLUMN category");
   if (await hasColumn(db, 'questions', 'enabled')) await db.query("ALTER TABLE questions DROP COLUMN enabled");
 }
+async function ensurePracticeRecordColumns(db: Pool) {
+  const columns: Array<[string, string]> = [
+    ['transcript', 'LONGTEXT NULL'],
+    ['transcript_status', "VARCHAR(20) NOT NULL DEFAULT 'none'"],
+    ['transcript_error', 'TEXT NULL'],
+    ['transcript_started_at', 'DATETIME NULL'],
+    ['transcribed_at', 'DATETIME NULL'],
+  ];
+  for (const [name, definition] of columns) {
+    if (!(await hasColumn(db, 'practice_records', name))) await db.query('ALTER TABLE practice_records ADD COLUMN ' + name + ' ' + definition);
+  }
+}
 async function initializeDatabase(db: Pool) {
   for (const statement of schema) await db.query(statement);
   await db.query("ALTER TABLE users MODIFY COLUMN status ENUM('pending', 'active', 'rejected', 'deleted') NOT NULL DEFAULT 'active'");
   await ensureQuestionColumns(db);
+  await ensurePracticeRecordColumns(db);
   if (!(await hasColumn(db, 'user_settings', 'avoid_repeated'))) {
     await db.query('ALTER TABLE user_settings ADD COLUMN avoid_repeated TINYINT(1) NOT NULL DEFAULT 0');
   }

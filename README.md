@@ -11,6 +11,7 @@
 - 作答记录持久化，支持类别筛选、关键词搜索和录音回放
 - MySQL 初始化只在对应表不存在或表为空时写入默认数据，已有内容不会覆盖
 - Docker Compose + Caddy HTTP 反向代理（无域名时使用服务器 IP:18080）
+- 作答详情支持调用阿里云百炼 Paraformer-v1 异步生成录音文字稿，并预留 AI 评估区域
 
 ## 初始账号
 
@@ -41,7 +42,21 @@ npm run dev
 - 端口：`33060`
 - 数据库：`baoyanxunlian`
 
-MySQL 用户名和密码只放在 `.env`，不会写入代码或 README。请使用数据库专用账号，不要使用 `root`；密码字段使用 bcrypt 哈希，不保存应用用户的明文密码。
+录音转写配置（可选）：
+
+DASHSCOPE_API_KEY=你的百炼 API Key
+DASHSCOPE_ASR_MODEL=paraformer-v1
+DASHSCOPE_ASR_URL=https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription
+ASR_PUBLIC_BASE_URL=http://你的服务器公网IP:18080
+ASR_AUDIO_TOKEN_SECRET=建议填写一段随机字符串
+
+百炼录音文件识别需要读取公网音频 URL，因此 ASR_PUBLIC_BASE_URL 必须是百炼可以访问的地址。应用会生成 1 小时有效的签名音频 URL，不会公开整个录音接口。API Key 使用 Bearer 认证，修改服务器 .env 后需要重新创建容器：
+
+~~~bash
+docker compose -p baoyanxunlian up -d --build --force-recreate
+~~~
+
+未配置 API Key 或公网地址时，录音仍可正常保存，但生成文字稿会提示配置错误。MySQL 用户名和密码只放在 `.env`，不会写入代码或 README。请使用数据库专用账号，不要使用 `root`；密码字段使用 bcrypt 哈希，不保存应用用户的明文密码。
 
 如果本机 `33060` 已被占用，可以把 SSH 命令中的本地端口换成其他端口，并同步修改 `.env` 的 `MYSQL_PORT`。
 

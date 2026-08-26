@@ -130,3 +130,48 @@ footer>span:first-child{color:var(--ink);font-weight:700}
 @media(max-width:480px){
   .logo-image{width:165px}
 }
+/* Practice detail and transcription */
+.record-group-main{min-width:0}
+.record-latest{margin:7px 0 0;color:#87938e;font-size:12px}
+.record-group-actions{display:flex;flex-wrap:wrap;gap:9px;margin-top:17px}
+.record-group-actions button{min-height:34px;padding:0 13px;border-radius:3px;font-size:12px;font-weight:700}
+.record-open{border:1px solid #c5d8cc;background:#f5faf6;color:#286b53}
+.record-continue{border:1px solid #e6a48d;background:#fff8f4;color:#bf6549}
+.record-group-actions button:hover{transform:translateY(-1px)}
+.record-detail-backdrop{align-items:stretch;padding:24px}
+.record-detail-modal{position:relative;width:min(900px,100%);max-height:calc(100dvh - 48px);overflow:auto;padding:35px 38px 38px;border:1px solid #e2e8e2;border-radius:8px;background:#fbfcfa;box-shadow:0 26px 80px #102a2650;animation:modal-enter .22s ease-out}
+.record-detail-modal h2{max-width:760px;margin:8px 0 5px;color:var(--ink);font-family:serif;font-size:30px;line-height:1.45}
+.record-detail-meta{display:block;color:#81908a;font-size:12px}
+.record-detail-actions{display:flex;justify-content:flex-end;margin:5px 0 20px}
+.record-detail-actions .modal-submit{width:auto;min-width:120px;margin:0;padding:0 19px}
+.detail-reference{margin:0 0 25px;padding:22px 24px;border:1px solid #f0dfc9;border-radius:5px;background:#fff9f2}
+.detail-reference h3{margin:7px 0 8px;font-family:serif;font-size:22px}
+.detail-reference p{margin:0;color:#6c6359;line-height:1.85;white-space:pre-wrap}
+.detail-attempts>h3{margin:0 0 12px;font-family:serif;font-size:22px}
+.detail-attempt{margin-top:11px;padding:19px 21px;border:1px solid var(--line);border-radius:5px;background:#fff}
+.detail-attempt-head{display:flex;align-items:center;justify-content:space-between;gap:15px}
+.detail-attempt-head strong{color:#335f53;font-size:13px}
+.detail-attempt-head small{color:#89958f;font-size:11px}
+.detail-answer-label{margin:15px 0 4px;color:#9a6a55;font-size:11px;font-weight:700;letter-spacing:1px}
+.detail-answer{margin:0;color:#65746e;line-height:1.8;white-space:pre-wrap}
+.detail-audio{display:grid;gap:12px;margin-top:16px}
+.detail-audio audio{width:min(500px,100%);height:36px}
+.transcript-box{padding:14px 16px;border-radius:4px;background:#f3f7f3}
+.transcript-box>p{margin:7px 0 0;color:#63736c;line-height:1.8;white-space:pre-wrap}
+.transcript-box>button{min-height:34px;margin-top:10px;padding:0 13px;border:1px solid #b9d4c1;border-radius:3px;background:#fff;color:#286b53;font-size:12px;font-weight:700}
+.transcript-state{display:inline-flex;padding:4px 8px;border-radius:2px;font-size:11px;font-weight:700}
+.transcript-state.done{background:#e5f3e8;color:#317251}
+.transcript-state.pending{background:#fff2d9;color:#a36d21}
+.transcript-state.failed{background:#fdebe6;color:#b64f39}
+.no-audio{margin:15px 0 0;color:#9a9990;font-size:12px}
+.ai-placeholder{margin-top:24px;padding:21px 24px;border:1px dashed #b8cfc2;border-radius:5px;background:#f4f8f4}
+.ai-placeholder h3{margin:7px 0 5px;font-family:serif;font-size:21px;color:#416b5d}
+.ai-placeholder p{margin:0;color:#829089;font-size:12px}
+@media(max-width:650px){
+  .record-detail-backdrop{padding:10px}
+  .record-detail-modal{max-height:calc(100dvh - 20px);padding:30px 20px 25px}
+  .record-detail-modal h2{font-size:24px}
+  .detail-reference,.detail-attempt{padding:17px}
+  .record-detail-actions{justify-content:stretch}
+  .record-detail-actions .modal-submit{width:100%}
+}

@@ -12,9 +12,15 @@ export async function GET(request: Request) {
     if (user.role !== 'admin') values.push(user.id);
     values.push(category, category, search, `%${search}%`, `%${search}%`);
     const records = await query(`SELECT r.id, r.user_id AS userId, r.question_id AS questionId, r.category, r.question, r.answer,
-      r.audio_data IS NOT NULL AS hasAudio, DATE_FORMAT(r.created_at, '%Y-%m-%dT%H:%i:%s') AS createdAt,
+      q.type_id AS typeId, q.subcategory, q.answer AS referenceAnswer,
+      (q.answer IS NOT NULL AND CHAR_LENGTH(TRIM(q.answer)) > 0) AS hasReferenceAnswer,
+      r.audio_data IS NOT NULL AS hasAudio,
+      r.transcript, r.transcript_status AS transcriptStatus, r.transcript_error AS transcriptError,
+      DATE_FORMAT(r.transcribed_at, '%Y-%m-%dT%H:%i:%s') AS transcribedAt,
+      DATE_FORMAT(r.created_at, '%Y-%m-%dT%H:%i:%s') AS createdAt,
       u.username AS username, u.display_name AS displayName
       FROM practice_records r JOIN users u ON u.id = r.user_id
+      LEFT JOIN questions q ON q.id = r.question_id
       WHERE 1 = 1 ${ownerFilter}
         AND (? = '' OR r.category = ?)
         AND (? = '' OR r.question LIKE ? OR r.answer LIKE ?)

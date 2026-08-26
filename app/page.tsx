@@ -10,7 +10,7 @@ type ManagedUser = User & { status: 'pending' | 'active' | 'rejected' };
 type Question = { id: number; typeId: number; typeCode: string; category: Category; content: string; subcategory?: string | null; hasAnswer?: number };
 type QuestionType = { id: number; code: string; name: string; description: string | null; sortOrder?: number };
 type BankQuestion = { id: number; typeId: number; typeName: string; content: string; answer: string | null; subcategory: string | null; status: string; extra?: unknown };
-type RecordItem = { id: number; userId: number; questionId: number | null; category: Category; question: string; answer: string; hasAudio: number; createdAt: string; username?: string; displayName?: string };
+type RecordItem = { id: number; userId: number; questionId: number | null; typeId?: number | null; category: Category; question: string; answer: string; subcategory?: string | null; referenceAnswer?: string | null; hasReferenceAnswer?: number; hasAudio: number; transcript?: string | null; transcriptStatus?: string; transcriptError?: string | null; transcribedAt?: string | null; createdAt: string; username?: string; displayName?: string };
 type RecordGroup = { key: string; userId: number; questionId: number | null; category: Category; question: string; username?: string; attempts: RecordItem[] };
 type Page = 'home' | 'answer' | 'history' | 'settings' | 'users' | 'question-bank';
 
@@ -131,6 +131,20 @@ export default function Home() {
     setRecording(false);
   }
 
+  function continueFromRecord(item: RecordItem) {
+    if (!item.questionId || !item.typeId) {
+      setMessage('原题已不存在，无法继续作答。');
+      return;
+    }
+    stopMedia();
+    setQuestion({ id: item.questionId, typeId: item.typeId, typeCode: '', category: item.category, content: item.question, subcategory: item.subcategory, hasAnswer: item.hasReferenceAnswer });
+    setAnswer('');
+    setAudioBlob(null);
+    setReferenceAnswer(item.referenceAnswer || null);
+    setCountdown(3);
+    setPage('answer');
+    window.scrollTo(0, 0);
+  }
   async function save() {
     if (!question) return;
     setMessage('正在保存…');
@@ -149,7 +163,7 @@ export default function Home() {
 
   return <div className="app">
     <header>
-      <button className="logo" onClick={() => setPage('home')}><img className="logo-image" src="/logo.svg" alt="小鱼食品保研" /><span className="logo-training"><strong>保研面试训练</strong><small>INTERVIEW TRAINING</small></span></button>
+      <button className="logo" onClick={() => setPage('home')}><img className="logo-image" src="/logo.svg?v=3" alt="小鱼食品保研" loading="eager" /><span className="logo-training"><strong>保研面试训练</strong><small>INTERVIEW TRAINING</small></span></button>
       <nav>
         <button className={page === 'home' || page === 'answer' ? 'active' : ''} onClick={() => setPage('home')}>题库训练</button>
         <button className={page === 'history' ? 'active' : ''} onClick={() => setPage('history')}>作答记录 <i>{records.length}</i></button>
@@ -168,7 +182,7 @@ export default function Home() {
 
     {page === 'answer' && question && <main className="answer-page"><button className="back" onClick={() => { stopMedia(); setPage('home'); }}>← 返回题库</button><div className="answer-head"><div><small>{question.category}</small><h1>模拟作答</h1></div><button className="again" onClick={() => draw(question.typeId)}>↻ 换一题</button></div><section className="question"><small>INTERVIEW QUESTION</small><b>Q</b><h2>{question.content}</h2>{question.subcategory && <span className="question-subcategory">{question.subcategory}</span>}<p>回答提示：观点明确 · 结构清晰 · 结合具体经历或案例</p>{countdown !== null && <div className="countdown"><div key={countdown}>{countdown}</div><strong>准备开始</strong><small>倒计时结束后{autoRecord ? '将自动录音' : '开始作答'}</small></div>}</section>{referenceAnswer && <section className="reference-answer"><span className="section-kicker">REFERENCE ANSWER</span><h3>参考答案</h3><p>{referenceAnswer}</p></section>}<section className="response"><label>作答提纲 <small>选填</small></label><textarea disabled={countdown !== null} value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="记录你的回答框架、关键词或复盘笔记……" /><div className={`recorder ${recording ? 'on' : ''}`}><span><b>{recording ? '● 正在录音' : audioBlob ? '✓ 录音已完成' : '◉ 录制作答'}</b><small>{recording ? '请保持自然语速' : autoRecord ? '倒计时后自动开始，也可手动控制' : '自动录音已在设置中关闭'}</small></span><button disabled={countdown !== null} onClick={() => recording ? void stopRecording() : void startRecording()}>{recording ? '结束录音' : audioBlob ? '重新录制' : '开始录音'}</button></div></section><div className="actions"><button onClick={() => { stopMedia(); setPage('home'); }}>退出练习</button><button onClick={save} disabled={countdown !== null}>完成并保存记录 →</button></div></main>}
 
-    {page === 'history' && <History records={records} cards={homeCards} onFilter={loadRecords} onNew={() => setPage('home')} />}
+    {page === 'history' && <History records={records} cards={homeCards} onFilter={loadRecords} onNew={() => setPage('home')} onContinue={continueFromRecord} />}
     {page === 'settings' && <Settings autoRecord={autoRecord} avoidRepeated={avoidRepeated} onChange={(value, repeated) => { setAutoRecord(value); setAvoidRepeated(repeated); }} />}
     {page === 'users' && user.role === 'admin' && <Users />}
     {page === 'question-bank' && user.role === 'admin' && <QuestionBank />}
@@ -268,11 +282,13 @@ function Login({ onSubmit, message }: { onSubmit: (event: FormEvent<HTMLFormElem
   return <div className="login-shell"><form className="login-card" onSubmit={registering ? register : onSubmit}><b className="login-mark">研</b><small>YANLU INTERVIEW TRAINER</small><h1>{registering ? '申请注册' : '欢迎回来'}</h1><p>{registering ? '提交后需管理员审核通过才能登录' : '登录后开始你的保研面试训练'}</p>{registering && <label>姓名<input name="displayName" autoComplete="name" required /></label>}<label>账号<input name="username" autoComplete="username" required /></label><label>密码<input name="password" type="password" minLength={registering ? 8 : undefined} autoComplete={registering ? 'new-password' : 'current-password'} required /></label>{(registering ? registerMessage : message) && <div className={registerMessage.includes('已提交') ? 'form-success' : 'form-error'}>{registering ? registerMessage : message}</div>}<button type="submit">{registering ? '提交注册申请 →' : '登录系统 →'}</button><button type="button" className="login-switch" onClick={() => { setRegistering(!registering); setRegisterMessage(''); }}>{registering ? '已有账号？返回登录' : '没有账号？申请注册'}</button></form></div>;
 }
 
-function History({ records, cards, onFilter, onNew }: { records: RecordItem[]; cards: HomeCard[]; onFilter: (category?: string, search?: string) => Promise<void>; onNew: () => void }) {
+function History({ records, cards, onFilter, onNew, onContinue }: { records: RecordItem[]; cards: HomeCard[]; onFilter: (category?: string, search?: string) => Promise<void>; onNew: () => void; onContinue: (item: RecordItem) => void }) {
   const [category, setCategory] = useState('');
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [jumpPage, setJumpPage] = useState('1');
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [message, setMessage] = useState('');
   const pageSize = 8;
   const groups: RecordGroup[] = [];
   for (const item of records) {
@@ -286,6 +302,14 @@ function History({ records, cards, onFilter, onNew }: { records: RecordItem[]; c
   }
   const totalPages = Math.max(1, Math.ceil(groups.length / pageSize));
   const visibleGroups = groups.slice((page - 1) * pageSize, page * pageSize);
+  const selectedGroup = selectedKey ? groups.find((group) => group.key === selectedKey) || null : null;
+
+  useEffect(() => {
+    if (!selectedKey || !selectedGroup?.attempts.some((item) => item.transcriptStatus === 'processing')) return;
+    const timer = window.setInterval(() => { void onFilter(category, search).catch(() => undefined); }, 5000);
+    return () => window.clearInterval(timer);
+  }, [selectedKey, selectedGroup, category, search, onFilter]);
+
   function applyFilter(event: FormEvent) {
     event.preventDefault(); setPage(1); setJumpPage('1'); void onFilter(category, search);
   }
@@ -294,9 +318,28 @@ function History({ records, cards, onFilter, onNew }: { records: RecordItem[]; c
     const target = Math.min(totalPages, Math.max(1, Number(jumpPage) || 1));
     setPage(target); setJumpPage(String(target));
   }
-  return <main className="history-page"><div className="history-head"><div><p className="eyebrow">— PRACTICE ARCHIVE</p><h1>作答记录</h1><p>相同题目会合并展示，展开后可以查看每次具体作答。</p></div><button onClick={onNew}>＋ 新的练习</button></div><div className="stats"><div><span>题目记录</span><strong>{groups.length}<small> 题</small></strong></div><div><span>累计作答</span><strong>{records.length}<small> 次</small></strong></div><div><span>保存录音</span><strong>{records.filter((r) => r.hasAudio).length}<small> 条</small></strong></div></div><form className="filters" onSubmit={applyFilter}><select value={category} onChange={(event) => { setCategory(event.target.value); setPage(1); }}><option value="">全部类别</option>{cards.map((card) => <option key={card.name}>{card.name}</option>)}</select><input value={search} onChange={(event) => setSearch(event.target.value)} /><button>筛选记录</button></form><section className="records">{visibleGroups.map((group, index) => <article className="record-group" key={group.key}><b>{String((page - 1) * pageSize + index + 1).padStart(2, '0')}</b><div><small>{group.username ? '学员：' + group.username + ' · ' : ''}{group.category} · {group.attempts.length} 次作答</small><h3>{group.question}</h3><details><summary>查看每次作答</summary><div className="attempt-list">{group.attempts.map((item) => <div className="attempt" key={item.id}><small>{formatRecordDate(item.createdAt)}</small><p>{item.answer}</p>{Boolean(item.hasAudio) && <audio controls preload="none" src={'/api/records/' + item.id + '/audio'} />}</div>)}</div></details></div></article>)}</section><div className="pagination"><button disabled={page <= 1} onClick={() => setPage(page - 1)}>← 上一页</button><span>第 {page} / {totalPages} 页</span><button disabled={page >= totalPages} onClick={() => setPage(page + 1)}>下一页 →</button><form className="page-jump" onSubmit={jump}><input type="number" min="1" max={totalPages} value={jumpPage} onChange={(event) => setJumpPage(event.target.value)} /><button>跳转</button></form></div></main>;
-}
+  async function transcribe(item: RecordItem) {
+    setMessage('');
+    try {
+      await jsonFetch('/api/records/' + item.id + '/transcription', { method: 'POST' });
+      setMessage('已开始生成文字稿，请稍候查看。');
+      await onFilter(category, search);
+    } catch (error) { setMessage((error as Error).message); }
+  }
 
+  return <main className="history-page">
+    <div className="history-head"><div><p className="eyebrow">— PRACTICE ARCHIVE</p><h1>作答记录</h1><p>相同题目会合并展示，点击记录可查看答案、录音和文字稿。</p></div><button onClick={onNew}>＋ 新的练习</button></div>
+    <div className="stats"><div><span>题目记录</span><strong>{groups.length}<small> 题</small></strong></div><div><span>累计作答</span><strong>{records.length}<small> 次</small></strong></div><div><span>保存录音</span><strong>{records.filter((r) => r.hasAudio).length}<small> 条</small></strong></div></div>
+    <form className="filters" onSubmit={applyFilter}><select value={category} onChange={(event) => { setCategory(event.target.value); setPage(1); }}><option value="">全部类别</option>{cards.map((card) => <option key={card.name}>{card.name}</option>)}</select><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索题目或作答内容" /><button>筛选记录</button></form>
+    {message && <div className="management-message">{message}</div>}
+    <section className="records">{visibleGroups.length ? visibleGroups.map((group, index) => {
+      const latest = group.attempts[0];
+      return <article className="record-group" key={group.key}><b>{String((page - 1) * pageSize + index + 1).padStart(2, '0')}</b><div className="record-group-main"><small>{group.username ? '学员：' + group.username + ' · ' : ''}{group.category} · {group.attempts.length} 次作答</small><h3>{group.question}</h3><p className="record-latest">{formatRecordDate(latest.createdAt)} · {latest.hasAudio ? '含录音' : '无录音'} · {latest.referenceAnswer ? '有参考答案' : '暂无参考答案'}</p><div className="record-group-actions"><button className="record-open" onClick={() => setSelectedKey(group.key)}>查看详情 <span>→</span></button>{latest.questionId && latest.typeId && <button className="record-continue" onClick={() => onContinue(latest)}>继续作答</button>}</div></div></article>;
+    }) : <div className="empty"><b>复</b><h3>还没有作答记录</h3><p>完成一次练习后，录音、答案和复盘信息会出现在这里。</p></div>}</section>
+    <div className="pagination"><button disabled={page <= 1} onClick={() => setPage(page - 1)}>← 上一页</button><span>第 {page} / {totalPages} 页</span><button disabled={page >= totalPages} onClick={() => setPage(page + 1)}>下一页 →</button><form className="page-jump" onSubmit={jump}><input type="number" min="1" max={totalPages} value={jumpPage} onChange={(event) => setJumpPage(event.target.value)} /><button>跳转</button></form></div>
+    {selectedGroup && <div className="modal-backdrop record-detail-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedKey(null); }}><section className="record-detail-modal" role="dialog" aria-modal="true" aria-labelledby="record-detail-title"><button type="button" className="modal-close" aria-label="关闭记录详情" onClick={() => setSelectedKey(null)}>×</button><span className="section-kicker">PRACTICE DETAIL</span><small className="record-detail-meta">{selectedGroup.username ? '学员：' + selectedGroup.username + ' · ' : ''}{selectedGroup.category} · {selectedGroup.attempts.length} 次作答</small><h2 id="record-detail-title">{selectedGroup.question}</h2><div className="record-detail-actions">{selectedGroup.attempts[0].questionId && selectedGroup.attempts[0].typeId && <button className="modal-submit" onClick={() => { onContinue(selectedGroup.attempts[0]); setSelectedKey(null); }}>继续作答</button>}</div><section className="detail-reference">{selectedGroup.attempts[0].referenceAnswer ? <><span className="section-kicker">REFERENCE ANSWER</span><h3>参考答案</h3><p>{selectedGroup.attempts[0].referenceAnswer}</p></> : <><span className="section-kicker">REFERENCE ANSWER</span><h3>暂无参考答案</h3><p>这道题暂时没有配置参考答案。</p></>}</section><div className="detail-attempts"><h3>每次具体作答</h3>{selectedGroup.attempts.map((item, index) => <article className="detail-attempt" key={item.id}><div className="detail-attempt-head"><strong>第 {selectedGroup.attempts.length - index} 次</strong><small>{formatRecordDate(item.createdAt)}</small></div><p className="detail-answer-label">文字作答</p><p className="detail-answer">{item.answer || '本次未填写文字作答。'}</p>{item.hasAudio ? <div className="detail-audio"><audio controls preload="none" src={'/api/records/' + item.id + '/audio'} /><div className="transcript-box">{item.transcriptStatus === 'completed' && item.transcript ? <><span className="transcript-state done">录音文字稿</span><p>{item.transcript}</p></> : item.transcriptStatus === 'processing' ? <><span className="transcript-state pending">正在生成文字稿…</span><p>转写服务正在处理，请稍候，页面会自动刷新。</p></> : item.transcriptStatus === 'failed' ? <><span className="transcript-state failed">生成失败</span><p>{item.transcriptError || '转写失败，请重试。'}</p><button onClick={() => void transcribe(item)}>重新生成文字稿</button></> : <button onClick={() => void transcribe(item)}>生成录音文字稿</button>}</div></div> : <p className="no-audio">这次作答没有录音。</p>}</article>)}</div><section className="ai-placeholder"><span className="section-kicker">AI REVIEW · COMING SOON</span><h3>AI 作答评估区域</h3><p>后续可在这里查看表达结构、专业性、流畅度和改进建议。</p></section></section></div>}
+  </main>;
+}
 function Settings({ autoRecord, avoidRepeated, onChange }: { autoRecord: boolean; avoidRepeated: boolean; onChange: (value: boolean, avoidRepeated: boolean) => void }) {
   const [saved, setSaved] = useState('');
   const [guideOpen, setGuideOpen] = useState(false);
