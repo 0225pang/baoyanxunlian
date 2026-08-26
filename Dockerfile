@@ -18,8 +18,6 @@ RUN groupadd --system --gid 1001 nodejs && useradd --system --uid 1001 --gid nod
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
-COPY --from=builder --chown=nextjs:nodejs /app/server.mjs ./server.mjs
-COPY --from=deps --chown=nextjs:nodejs /app/node_modules/ws ./node_modules/ws
 USER nextjs
 EXPOSE 3000
-CMD ["node", "server.mjs"]
+CMD ["node", "server.js"]
