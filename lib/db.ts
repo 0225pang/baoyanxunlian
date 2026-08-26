@@ -155,6 +155,59 @@ const schema = [
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_ai_messages_conversation (user_id, question_id, created_at)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE TABLE IF NOT EXISTS simulation_templates (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(120) NOT NULL,
+    description VARCHAR(500) NULL,
+    modules JSON NOT NULL,
+    total_seconds INT UNSIGNED NOT NULL DEFAULT 1800,
+    followup_prompt LONGTEXT NULL,
+    is_active TINYINT(1) NOT NULL DEFAULT 1,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_simulation_template_name (name)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE TABLE IF NOT EXISTS realtime_asr_settings (
+    id TINYINT UNSIGNED NOT NULL PRIMARY KEY,
+    provider VARCHAR(50) NOT NULL DEFAULT 'bailian',
+    websocket_url VARCHAR(500) NOT NULL,
+    model VARCHAR(150) NOT NULL DEFAULT 'qwen-audio-3.0-asr-flash-streaming',
+    api_key TEXT NULL,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE TABLE IF NOT EXISTS simulation_sessions (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT UNSIGNED NOT NULL,
+    template_id BIGINT UNSIGNED NULL,
+    template_name VARCHAR(120) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'in_progress',
+    total_seconds INT UNSIGNED NOT NULL,
+    elapsed_seconds INT UNSIGNED NOT NULL DEFAULT 0,
+    full_audio_data LONGBLOB NULL,
+    full_audio_mime VARCHAR(100) NULL,
+    transcript LONGTEXT NULL,
+    transcript_segments JSON NULL,
+    started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at DATETIME NULL,
+    INDEX idx_simulation_sessions_user_created (user_id, started_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE TABLE IF NOT EXISTS simulation_answers (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    session_id BIGINT UNSIGNED NOT NULL,
+    module_index INT UNSIGNED NOT NULL,
+    module_title VARCHAR(120) NOT NULL,
+    question_id BIGINT UNSIGNED NULL,
+    question TEXT NOT NULL,
+    answer LONGTEXT NULL,
+    transcript LONGTEXT NULL,
+    transcript_segments JSON NULL,
+    audio_data LONGBLOB NULL,
+    audio_mime VARCHAR(100) NULL,
+    elapsed_seconds INT UNSIGNED NOT NULL DEFAULT 0,
+    followup_question TEXT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_simulation_answers_session_module (session_id, module_index)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 ];
 
 async function hasColumn(db: Pool, table: string, column: string) {
@@ -350,6 +403,27 @@ async function initializeDatabase(db: Pool) {
       'UPDATE ai_settings SET active_config_id = COALESCE(active_config_id, ?), active_prompt_id = COALESCE(active_prompt_id, ?), provider = ?, base_url = ?, model = ?, api_key = ?, system_prompt = ? WHERE id = 1',
       [activeConfig.id, activePrompt.id, activeConfig.provider, activeConfig.baseUrl, activeConfig.model, activeConfig.apiKey || null, activePrompt.content],
     );
+  }
+
+  const [templateRows] = await db.query<RowDataPacket[]>('SELECT COUNT(*) AS count FROM simulation_templates');
+  if (Number(templateRows[0].count) === 0) {
+    const modules = [
+      { id: 'intro', title: '中文自我介绍', kind: 'intro', count: 1, timeSeconds: 480, allowFollowup: false, prompt: '请进行中文自我介绍，不需要 PPT。' },
+      { id: 'ideology', title: '思政抽题', kind: 'question', typeCode: 'comprehensive', count: 1, timeSeconds: 120, allowFollowup: false },
+      { id: 'english', title: '英语问答', kind: 'question', typeCode: 'english', count: 1, timeSeconds: 120, allowFollowup: true },
+      { id: 'professional', title: '专业课抽题', kind: 'question', typeCode: 'professional', count: 1, timeSeconds: 180, allowFollowup: true },
+    ];
+    await db.query('INSERT INTO simulation_templates (name, description, modules, total_seconds, followup_prompt) VALUES (?, ?, ?, ?, ?)', [
+      '中农完整面试模拟', '中文自我介绍 → 思政抽题 → 英语问答 → 专业课抽题 → 老师追问', JSON.stringify(modules), 1800,
+      '你是一名食品专业保研面试老师。请只根据题目与学员刚才的回答，提出一个自然、具体、有区分度的追问。只输出追问问题本身，不要解释。',
+    ]);
+  }
+  const [realtimeRows] = await db.query<RowDataPacket[]>('SELECT COUNT(*) AS count FROM realtime_asr_settings');
+  if (Number(realtimeRows[0].count) === 0) {
+    await db.query('INSERT INTO realtime_asr_settings (id, provider, websocket_url, model, api_key) VALUES (1, ?, ?, ?, ?)', [
+      'bailian', process.env.DASHSCOPE_REALTIME_ASR_URL || 'wss://dashscope.aliyuncs.com/api-ws/v1/inference/',
+      process.env.DASHSCOPE_REALTIME_ASR_MODEL || 'qwen-audio-3.0-asr-flash-streaming', process.env.DASHSCOPE_API_KEY || process.env.BAILIAN_API_KEY || null,
+    ]);
   }
 }
 
