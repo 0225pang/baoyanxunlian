@@ -61,14 +61,26 @@ function formatTranscriptTime(milliseconds: number) {
 }
 
 function markdownInline(value: string): ReactNode[] {
-  const normalized = value.replace(/\\\*\\\*/g, '**');
-  return normalized.split(/(\*\*[\s\S]+?\*\*|`[^`]+`|\[[^\]]+\]\([^\)]+\))/g).filter(Boolean).map((part, index) => {
-    if (part.startsWith('**') && part.endsWith('**')) return <strong key={index}>{part.slice(2, -2)}</strong>;
-    if (part.startsWith('`') && part.endsWith('`')) return <code key={index}>{part.slice(1, -1)}</code>;
-    const link = part.match(/^\[([^\]]+)\]\(([^\)]+)\)$/);
-    if (link) return <a key={index} href={link[2]} target={'_blank'} rel={'noreferrer'}>{link[1]}</a>;
-    return <span key={index}>{part}</span>;
-  });
+  // AI responses may contain escaped asterisks, full-width asterisks, or
+  // zero-width characters between asterisks. Normalize them before parsing.
+  const normalized = String(value)
+    .normalize('NFKC')
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, '')
+    .replace(/\\+(\*)/g, '$1');
+  const nodes: ReactNode[] = [];
+  const tokens = normalized.split(/(`[^`]+`|\[[^\]]+\]\([^\)]+\))/g).filter(Boolean);
+  let key = 0;
+  for (const token of tokens) {
+    if (token.startsWith('`') && token.endsWith('`')) { nodes.push(<code key={key++}>{token.slice(1, -1)}</code>); continue; }
+    const link = token.match(/^\[([^\]]+)\]\(([^\)]+)\)$/);
+    if (link) { nodes.push(<a key={key++} href={link[2]} target={'_blank'} rel={'noreferrer'}>{link[1]}</a>); continue; }
+    const parts = token.split(/(\*{2,3}[\s\S]+?\*{2,3})/g).filter(Boolean);
+    for (const part of parts) {
+      const bold = part.match(/^\*{2,3}([\s\S]*?)\*{2,3}$/);
+      nodes.push(bold ? <strong key={key++}>{bold[1]}</strong> : <span key={key++}>{part}</span>);
+    }
+  }
+  return nodes;
 }
 
 function MarkdownContent({ value, className = '' }: { value: string; className?: string }) {
