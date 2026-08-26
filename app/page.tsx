@@ -430,7 +430,7 @@ function Simulation({ onBack }: { onBack: () => void }) {
     };
     socket.onerror = () => setMessage('实时语音识别连接失败，本场仍会保存录音。');
     socket.onopen = () => {
-      socket.send(JSON.stringify({ action: 'start', taskId: crypto.randomUUID(), sampleRate: 16000 }));
+      socket.send(JSON.stringify({ action: 'start', taskId: crypto.randomUUID?.() || `task-${Date.now()}`, sampleRate: 16000 }));
       const context = new AudioContext(); realtimeContext.current = context; const source = context.createMediaStreamSource(media); const processor = context.createScriptProcessor(4096, 1, 1); const mute = context.createGain(); mute.gain.value = 0;
       processor.onaudioprocess = (event) => { if (socket.readyState !== WebSocket.OPEN) return; const input = event.inputBuffer.getChannelData(0); const ratio = context.sampleRate / 16000; const length = Math.floor(input.length / ratio); const pcm = new Int16Array(length); for (let i = 0; i < length; i += 1) { const sample = Math.max(-1, Math.min(1, input[Math.floor(i * ratio)])); pcm[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff; } socket.send(pcm.buffer); };
       source.connect(processor); processor.connect(mute); mute.connect(context.destination); realtimeSource.current = source; realtimeProcessor.current = processor; void context.resume();
