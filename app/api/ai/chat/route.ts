@@ -1,9 +1,7 @@
 import { apiError, requireUser } from '@/lib/auth';
 import { execute, query } from '@/lib/db';
-import { chatCompletionsUrl, extractChatContent, safeJsonParse } from '@/lib/ai';
+import { chatCompletionsUrl, extractChatContent, getActiveAiConfig, safeJsonParse } from '@/lib/ai';
 import type { RowDataPacket } from 'mysql2/promise';
-
-type ConfigRow = RowDataPacket & { baseUrl: string; model: string; apiKey: string | null; systemPrompt: string };
 
 async function targetUserId(currentId: number, role: string, value: unknown) {
   const requested = Number(value == null ? currentId : value);
@@ -19,8 +17,7 @@ export async function POST(request: Request) {
     const userId = await targetUserId(current.id, current.role, body.userId);
     const message = String(body.message || '').trim();
     if (!Number.isInteger(questionId) || questionId <= 0 || !message) return Response.json({ error: '问题和消息不能为空' }, { status: 400 });
-    const configRows = await query<ConfigRow[]>('SELECT base_url AS baseUrl, model, api_key AS apiKey, system_prompt AS systemPrompt FROM ai_settings WHERE id = 1 LIMIT 1');
-    const config = configRows[0];
+    const config = await getActiveAiConfig();
     if (!config?.apiKey) return Response.json({ error: 'AI 尚未配置 API Key，请联系管理员' }, { status: 503 });
     const existing = await query<RowDataPacket[]>('SELECT id, role, content FROM ai_messages WHERE user_id = ? AND question_id = ? AND role <> \'system\' ORDER BY id ASC', [userId, questionId]);
     if (!existing.length) return Response.json({ error: '请先生成一次评估，再开始对话' }, { status: 400 });

@@ -6,11 +6,14 @@ export async function GET() {
     const user = await requireUser();
     const rows = await query('SELECT auto_record AS autoRecord, avoid_repeated AS avoidRepeated, read_question AS readQuestion FROM user_settings WHERE user_id = ?', [user.id]);
     const row = rows[0] as { autoRecord: number; avoidRepeated: number; readQuestion: number } | undefined;
+    const aiRows = await query('SELECT auto_transcribe AS autoTranscribe FROM ai_settings WHERE id = 1 LIMIT 1');
+    const autoTranscribe = Boolean((aiRows[0] as { autoTranscribe?: number } | undefined)?.autoTranscribe);
     return Response.json({
       settings: {
         autoRecord: Boolean(row?.autoRecord),
         avoidRepeated: Boolean(row?.avoidRepeated),
         readQuestion: Boolean(row?.readQuestion),
+        autoTranscribe,
       },
     });
   } catch (error) {

@@ -96,7 +96,29 @@ const schema = [
     model VARCHAR(150) NOT NULL DEFAULT 'qwen3.8-27b',
     api_key TEXT NULL,
     system_prompt LONGTEXT NOT NULL,
+    active_config_id BIGINT UNSIGNED NULL,
+    active_prompt_id BIGINT UNSIGNED NULL,
+    auto_transcribe TINYINT(1) NOT NULL DEFAULT 0,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE TABLE IF NOT EXISTS ai_model_configs (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    provider VARCHAR(50) NOT NULL DEFAULT 'bailian',
+    base_url VARCHAR(500) NOT NULL,
+    model VARCHAR(150) NOT NULL,
+    api_key TEXT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_ai_model_config_name (name)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE TABLE IF NOT EXISTS ai_prompts (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    content LONGTEXT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_ai_prompt_name (name)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS ai_evaluations (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -194,6 +216,9 @@ async function ensureAiColumns(db: Pool) {
     ['ai_settings', 'model', "VARCHAR(150) NOT NULL DEFAULT 'qwen3.8-27b'"],
     ['ai_settings', 'api_key', 'TEXT NULL'],
     ['ai_settings', 'system_prompt', 'LONGTEXT NULL'],
+    ['ai_settings', 'active_config_id', 'BIGINT UNSIGNED NULL'],
+    ['ai_settings', 'active_prompt_id', 'BIGINT UNSIGNED NULL'],
+    ['ai_settings', 'auto_transcribe', 'TINYINT(1) NOT NULL DEFAULT 0'],
     ['ai_evaluations', 'input_hash', 'CHAR(64) NULL'],
     ['ai_evaluations', 'input_snapshot', 'LONGTEXT NULL'],
     ['ai_evaluations', 'status', "VARCHAR(20) NOT NULL DEFAULT 'processing'"],
@@ -267,6 +292,33 @@ async function initializeDatabase(db: Pool) {
         'qwen3.8-27b',
         '你是一名资深的食品专业保研面试评估老师，熟悉食品科学与工程、食品质量与安全等方向的笔试和面试要求。\n请根据题目类型、题目内容以及学员最近最多三次回答，客观、具体、可执行地评估学员表现。重点找出回答中的问题和改进方向，同时肯定做得好的地方。\n请关注：专业知识准确性、回答结构、论据与案例、表达清晰度、逻辑连贯性、英语表达（如果是英语题）、思考停顿与回答节奏（如果提供了带时间戳的文字切片）。\n请使用简洁的 Markdown 输出，包含：总体评价、做得好的地方、主要问题、下一步改进建议、参考回答框架、与前几次相比的进步或退步。不要编造学员没有提供的经历或事实。',
       ],
+    );
+  }
+
+  const [modelConfigRows] = await db.query<RowDataPacket[]>('SELECT COUNT(*) AS count FROM ai_model_configs');
+  if (Number(modelConfigRows[0].count) === 0) {
+    const legacy = (await db.query<RowDataPacket[]>('SELECT provider, base_url AS baseUrl, model, api_key AS apiKey FROM ai_settings WHERE id = 1 LIMIT 1'))[0][0];
+    const modelResult = await db.query<ResultSetHeader>(
+      'INSERT INTO ai_model_configs (name, provider, base_url, model, api_key) VALUES (?, ?, ?, ?, ?)',
+      ['百炼默认模型', legacy?.provider || 'bailian', legacy?.baseUrl || 'https://dashscope.aliyuncs.com/compatible-mode/v1', legacy?.model || 'qwen3.8-27b', legacy?.apiKey || process.env.DASHSCOPE_API_KEY || null],
+    );
+    await db.query('UPDATE ai_settings SET active_config_id = ? WHERE id = 1', [modelResult[0].insertId]);
+  }
+  const [promptRows] = await db.query<RowDataPacket[]>('SELECT COUNT(*) AS count FROM ai_prompts');
+  if (Number(promptRows[0].count) === 0) {
+    const legacyPrompt = (await db.query<RowDataPacket[]>('SELECT system_prompt AS systemPrompt FROM ai_settings WHERE id = 1 LIMIT 1'))[0][0];
+    const promptResult = await db.query<ResultSetHeader>(
+      'INSERT INTO ai_prompts (name, content) VALUES (?, ?)',
+      ['食品保研面试评估', legacyPrompt?.systemPrompt || '你是一名资深的食品专业保研面试评估老师，请客观、具体地指出学员回答中的优点、问题和改进方向。'],
+    );
+    await db.query('UPDATE ai_settings SET active_prompt_id = ? WHERE id = 1', [promptResult[0].insertId]);
+  }
+  const activeConfig = (await db.query<RowDataPacket[]>('SELECT id, provider, base_url AS baseUrl, model, api_key AS apiKey FROM ai_model_configs ORDER BY id LIMIT 1'))[0][0];
+  const activePrompt = (await db.query<RowDataPacket[]>('SELECT id, content FROM ai_prompts ORDER BY id LIMIT 1'))[0][0];
+  if (activeConfig && activePrompt) {
+    await db.query(
+      'UPDATE ai_settings SET active_config_id = COALESCE(active_config_id, ?), active_prompt_id = COALESCE(active_prompt_id, ?), provider = ?, base_url = ?, model = ?, api_key = ?, system_prompt = ? WHERE id = 1',
+      [activeConfig.id, activePrompt.id, activeConfig.provider, activeConfig.baseUrl, activeConfig.model, activeConfig.apiKey || null, activePrompt.content],
     );
   }
 }

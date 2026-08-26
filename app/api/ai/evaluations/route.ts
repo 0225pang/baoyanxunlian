@@ -1,9 +1,8 @@
 import { apiError, requireUser } from '@/lib/auth';
 import { execute, query } from '@/lib/db';
-import { chatCompletionsUrl, extractChatContent, hashEvaluationInput, safeJsonParse } from '@/lib/ai';
+import { chatCompletionsUrl, extractChatContent, getActiveAiConfig, hashEvaluationInput, safeJsonParse, type ActiveAiConfig } from '@/lib/ai';
 import type { RowDataPacket } from 'mysql2/promise';
 
-type ConfigRow = RowDataPacket & { provider: string; baseUrl: string; model: string; apiKey: string | null; systemPrompt: string };
 type EvaluationInput = {
   question: { id: number; type: string; typeDescription: string | null; subcategory: string | null; content: string; referenceAnswer: string | null };
   attempts: Array<{ id: number; createdAt: string; answer: string; transcript: string | null; transcriptSegments: unknown }>;
@@ -21,7 +20,7 @@ function buildUserPrompt(input: EvaluationInput) {
 ${JSON.stringify(input, null, 2)}`;
 }
 
-async function runEvaluation(evaluationId: number, userId: number, questionId: number, input: EvaluationInput, config: ConfigRow, prompt: string) {
+async function runEvaluation(evaluationId: number, userId: number, questionId: number, input: EvaluationInput, config: ActiveAiConfig, prompt: string) {
   try {
     await execute('INSERT INTO ai_messages (user_id, question_id, evaluation_id, role, content) VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)', [
       userId, questionId, evaluationId, 'system', config.systemPrompt,
@@ -104,8 +103,7 @@ export async function POST(request: Request) {
     const inputHash = hashEvaluationInput({ questionId, userId, attempts: input.attempts.map((attempt) => ({ id: attempt.id, answer: attempt.answer, transcript: attempt.transcript, transcriptSegments: attempt.transcriptSegments })) });
     const existing = await query<RowDataPacket[]>('SELECT id, status, result, error FROM ai_evaluations WHERE user_id = ? AND question_id = ? AND input_hash = ? LIMIT 1', [userId, questionId, inputHash]);
     if (existing[0]) return Response.json({ status: existing[0].status, evaluationId: Number(existing[0].id), result: existing[0].result || null, error: existing[0].error || null, reused: true }, { status: existing[0].status === 'processing' ? 202 : 200 });
-    const configRows = await query<ConfigRow[]>('SELECT provider, base_url AS baseUrl, model, api_key AS apiKey, system_prompt AS systemPrompt FROM ai_settings WHERE id = 1 LIMIT 1');
-    const config = configRows[0];
+    const config = await getActiveAiConfig();
     if (!config?.apiKey) return Response.json({ error: 'AI 尚未配置 API Key，请先到管理后台填写' }, { status: 503 });
     const previousRows = await query<RowDataPacket[]>('SELECT result FROM ai_evaluations WHERE user_id = ? AND question_id = ? AND status = \'completed\' ORDER BY id DESC LIMIT 1', [userId, questionId]);
     const previousResult = previousRows[0]?.result ? String(previousRows[0].result) : '';

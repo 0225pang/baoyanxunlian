@@ -2,7 +2,7 @@
 
 import fixWebmDuration from 'fix-webm-duration';
 
-import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 
 type Category = string;
 type User = { id: number; username: string; displayName: string; role: 'admin' | 'student' };
@@ -59,6 +59,67 @@ function formatTranscriptTime(milliseconds: number) {
   const minutes = Math.floor(seconds / 60);
   return String(minutes).padStart(2, '0') + ':' + (seconds % 60).toFixed(1).padStart(4, '0');
 }
+
+function markdownInline(value: string): ReactNode[] {
+  return value.split(/(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^\)]+\))/g).filter(Boolean).map((part, index) => {
+    if (part.startsWith('**') && part.endsWith('**')) return <strong key={index}>{part.slice(2, -2)}</strong>;
+    if (part.startsWith('`') && part.endsWith('`')) return <code key={index}>{part.slice(1, -1)}</code>;
+    const link = part.match(/^\[([^\]]+)\]\(([^\)]+)\)$/);
+    if (link) return <a key={index} href={link[2]} target={'_blank'} rel={'noreferrer'}>{link[1]}</a>;
+    return <span key={index}>{part}</span>;
+  });
+}
+
+function MarkdownContent({ value, className = '' }: { value: string; className?: string }) {
+  const lines = String(value || '').replace(/\r\n/g, '\n').split('\n');
+  const blocks: ReactNode[] = [];
+  let paragraph: string[] = [];
+  let list: { ordered: boolean; items: string[] } | null = null;
+  let code: string[] | null = null;
+
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    blocks.push(<p key={'p-' + blocks.length}>{paragraph.join(' ')}</p>);
+    paragraph = [];
+  };
+  const flushList = () => {
+    if (!list) return;
+    const Tag = list.ordered ? 'ol' : 'ul';
+    blocks.push(<Tag key={'list-' + blocks.length}>{list.items.map((item, index) => <li key={index}>{markdownInline(item)}</li>)}</Tag>);
+    list = null;
+  };
+  const flushCode = () => {
+    if (!code) return;
+    blocks.push(<pre key={'code-' + blocks.length}><code>{code.join('\n')}</code></pre>);
+    code = null;
+  };
+
+  lines.forEach((line) => {
+    if (line.trim().startsWith('```')) {
+      flushParagraph(); flushList();
+      if (code) flushCode(); else code = [];
+      return;
+    }
+    if (code) { code.push(line); return; }
+    if (!line.trim()) { flushParagraph(); flushList(); return; }
+    const heading = line.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) { flushParagraph(); flushList(); blocks.push(<h3 key={'h-' + blocks.length} data-level={heading[1].length}>{markdownInline(heading[2])}</h3>); return; }
+    const bullet = line.match(/^\s*[-*+]\s+(.+)$/);
+    const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
+    if (bullet || ordered) {
+      flushParagraph();
+      const isOrdered = Boolean(ordered);
+      if (!list || list.ordered !== isOrdered) { flushList(); list = { ordered: isOrdered, items: [] }; }
+      list.items.push((bullet || ordered)![1]);
+      return;
+    }
+    if (line.startsWith('>')) { flushParagraph(); flushList(); blocks.push(<blockquote key={'q-' + blocks.length}>{markdownInline(line.replace(/^>\s?/, ''))}</blockquote>); return; }
+    paragraph.push(line.trim());
+  });
+  flushParagraph(); flushList(); flushCode();
+  return <div className={'markdown-content ' + className}>{blocks}</div>;
+}
+
 export default function Home() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -70,6 +131,7 @@ export default function Home() {
   const [answer, setAnswer] = useState('');
   const [records, setRecords] = useState<RecordItem[]>([]);
   const [autoRecord, setAutoRecord] = useState(true);
+  const [autoTranscribe, setAutoTranscribe] = useState(false);
   const [avoidRepeated, setAvoidRepeated] = useState(false);
   const [readQuestion, setReadQuestion] = useState(false);
   const [recording, setRecording] = useState(false);
@@ -133,7 +195,7 @@ export default function Home() {
 
   useEffect(() => {
     Promise.all([jsonFetch('/api/auth/me'), jsonFetch('/api/settings'), jsonFetch('/api/question-types')])
-      .then(([me, settings, typeData]) => { setUser(me.user); setAutoRecord(settings.settings.autoRecord); setAvoidRepeated(Boolean(settings.settings.avoidRepeated)); setReadQuestion(Boolean(settings.settings.readQuestion)); setQuestionTypes(typeData.types); return loadRecords(); })
+      .then(([me, settings, typeData]) => { setUser(me.user); setAutoRecord(settings.settings.autoRecord); setAutoTranscribe(Boolean(settings.settings.autoTranscribe)); setAvoidRepeated(Boolean(settings.settings.avoidRepeated)); setReadQuestion(Boolean(settings.settings.readQuestion)); setQuestionTypes(typeData.types); return loadRecords(); })
       .catch(() => setUser(null)).finally(() => setLoading(false));
   }, [loadRecords]);
 
@@ -177,7 +239,7 @@ export default function Home() {
     try {
       const data = await jsonFetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: form.get('username'), password: form.get('password') }) });
       setUser(data.user);
-      const settings = await jsonFetch('/api/settings'); setAutoRecord(settings.settings.autoRecord); setAvoidRepeated(Boolean(settings.settings.avoidRepeated)); setReadQuestion(Boolean(settings.settings.readQuestion)); const typeData = await jsonFetch('/api/question-types'); setQuestionTypes(typeData.types);
+      const settings = await jsonFetch('/api/settings'); setAutoRecord(settings.settings.autoRecord); setAutoTranscribe(Boolean(settings.settings.autoTranscribe)); setAvoidRepeated(Boolean(settings.settings.avoidRepeated)); setReadQuestion(Boolean(settings.settings.readQuestion)); const typeData = await jsonFetch('/api/question-types'); setQuestionTypes(typeData.types);
       await loadRecords();
     } catch (error) { setMessage((error as Error).message); }
   }
@@ -230,7 +292,8 @@ export default function Home() {
       const form = new FormData();
       form.set('questionId', String(question.id)); form.set('category', question.category); form.set('question', question.content); form.set('answer', answer);
       if (blob) form.set('audio', new File([blob], 'answer.webm', { type: blob.type || 'audio/webm' }));
-      await jsonFetch('/api/records', { method: 'POST', body: form });
+      const saved = await jsonFetch('/api/records', { method: 'POST', body: form });
+      if (autoTranscribe && blob && saved.id) await jsonFetch('/api/records/' + saved.id + '/transcription', { method: 'POST' }).catch(() => undefined);
       await loadRecords(); setMessage(''); setPage('history');
     } catch (error) { setMessage((error as Error).message); }
   }
@@ -259,9 +322,9 @@ export default function Home() {
 
     {page === 'answer' && question && <main className="answer-page"><button className="back" onClick={() => { stopMedia(); setPage('home'); }}>← 返回题库</button><div className="answer-head"><div><small>{question.category}</small><h1>模拟作答</h1></div><button className="again" onClick={() => draw(question.typeId)}>↻ 换一题</button></div><section className="question"><small>INTERVIEW QUESTION</small><b>Q</b><h2>{question.content}</h2>{question.subcategory && <span className="question-subcategory">{question.subcategory}</span>}<p>回答提示：观点明确 · 结构清晰 · 结合具体经历或案例</p>{countdown !== null && <div className="countdown"><div key={countdown}>{countdown}</div><strong>准备开始</strong><small>{readQuestion ? (autoRecord ? '朗读题目，朗读结束后自动录音' : '朗读题目后开始作答') : (autoRecord ? '倒计时结束后将自动录音' : '倒计时结束后开始作答')}</small></div>}</section>{referenceAnswer && <section className="reference-answer"><span className="section-kicker">REFERENCE ANSWER</span><h3>参考答案</h3><p>{referenceAnswer}</p></section>}<section className="response"><label>作答提纲 <small>选填</small></label><textarea disabled={countdown !== null} value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="记录你的回答框架、关键词或复盘笔记……" /><div className={`recorder ${recording ? 'on' : ''}`}><span><b>{recording ? '● 正在录音' : audioBlob ? '✓ 录音已完成' : '◉ 录制作答'}</b><small>{recording ? '请保持自然语速' : autoRecord ? '倒计时后自动开始，也可手动控制' : '自动录音已在设置中关闭'}</small></span><button disabled={countdown !== null} onClick={() => recording ? void stopRecording() : void startRecording()}>{recording ? '结束录音' : audioBlob ? '重新录制' : '开始录音'}</button></div></section><div className="actions"><button onClick={() => { stopMedia(); setPage('home'); }}>退出练习</button><button onClick={save} disabled={countdown !== null}>完成并保存记录 →</button></div></main>}
 
-    {page === 'history' && <History records={records} cards={homeCards} onFilter={loadRecords} onNew={() => setPage('home')} onContinue={continueFromRecord} onReview={(group) => { setReviewGroup(group); setPage('review'); }} />}
+    {page === 'history' && <History records={records} cards={homeCards} autoTranscribe={autoTranscribe} onFilter={loadRecords} onNew={() => setPage('home')} onContinue={continueFromRecord} onReview={(group) => { setReviewGroup(group); setPage('review'); }} />}
     {page === 'settings' && <Settings autoRecord={autoRecord} avoidRepeated={avoidRepeated} readQuestion={readQuestion} onChange={(value, repeated, read) => { setAutoRecord(value); setAvoidRepeated(repeated); setReadQuestion(read); }} />}
-    {page === 'review' && reviewGroup && <ReviewPage group={reviewGroup} onBack={() => { setPage('history'); void loadRecords(); }} />}
+    {page === 'review' && reviewGroup && <ReviewPage group={reviewGroup} autoTranscribe={autoTranscribe} onBack={() => { setPage('history'); void loadRecords(); }} />}
     {page === 'management' && user.role === 'admin' && <Management />}
     <footer><span>小鱼食品保研 · 保研面试训练</span><span>让准备看得见，让表达更从容。</span></footer>
   </div>;
@@ -359,12 +422,12 @@ function Login({ onSubmit, message }: { onSubmit: (event: FormEvent<HTMLFormElem
   return <div className="login-shell"><form className="login-card" onSubmit={registering ? register : onSubmit}><b className="login-mark">研</b><small>YANLU INTERVIEW TRAINER</small><h1>{registering ? '申请注册' : '欢迎回来'}</h1><p>{registering ? '提交后需管理员审核通过才能登录' : '登录后开始你的保研面试训练'}</p>{registering && <label>姓名<input name="displayName" autoComplete="name" required /></label>}<label>账号<input name="username" autoComplete="username" required /></label><label>密码<input name="password" type="password" minLength={registering ? 8 : undefined} autoComplete={registering ? 'new-password' : 'current-password'} required /></label>{(registering ? registerMessage : message) && <div className={registerMessage.includes('已提交') ? 'form-success' : 'form-error'}>{registering ? registerMessage : message}</div>}<button type="submit">{registering ? '提交注册申请 →' : '登录系统 →'}</button><button type="button" className="login-switch" onClick={() => { setRegistering(!registering); setRegisterMessage(''); }}>{registering ? '已有账号？返回登录' : '没有账号？申请注册'}</button></form></div>;
 }
 
-function History({ records, cards, onFilter, onNew, onContinue, onReview }: { records: RecordItem[]; cards: HomeCard[]; onFilter: (category?: string, search?: string) => Promise<void>; onNew: () => void; onContinue: (item: RecordItem) => void; onReview: (group: RecordGroup) => void }) {
+function History({ records, cards, autoTranscribe, onFilter, onNew, onContinue, onReview }: { records: RecordItem[]; cards: HomeCard[]; autoTranscribe: boolean; onFilter: (category?: string, search?: string) => Promise<void>; onNew: () => void; onContinue: (item: RecordItem) => void; onReview: (group: RecordGroup) => void }) {
   const [category, setCategory] = useState('');
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [jumpPage, setJumpPage] = useState('1');
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [selectedKey, setSelectedKeyState] = useState<string | null>(null);
   const [message, setMessage] = useState('');
   const pageSize = 8;
   const groups: RecordGroup[] = [];
@@ -380,12 +443,18 @@ function History({ records, cards, onFilter, onNew, onContinue, onReview }: { re
   const totalPages = Math.max(1, Math.ceil(groups.length / pageSize));
   const visibleGroups = groups.slice((page - 1) * pageSize, page * pageSize);
   const selectedGroup = selectedKey ? groups.find((group) => group.key === selectedKey) || null : null;
-
+  function setSelectedKey(nextKey: string | null) {
+    if (nextKey) {
+      const target = groups.find((group) => group.key === nextKey);
+      if (target) { onReview(target); return; }
+    }
+    setSelectedKeyState(nextKey);
+  }
   useEffect(() => {
-    if (!selectedKey || !selectedGroup?.attempts.some((item) => item.transcriptStatus === 'processing')) return;
+    if (!autoTranscribe || !records.some((item) => item.transcriptStatus === 'processing')) return;
     const timer = window.setInterval(() => { void onFilter(category, search).catch(() => undefined); }, 5000);
     return () => window.clearInterval(timer);
-  }, [selectedKey, selectedGroup, category, search, onFilter]);
+  }, [autoTranscribe, records, category, search, onFilter]);
 
   function applyFilter(event: FormEvent) {
     event.preventDefault(); setPage(1); setJumpPage('1'); void onFilter(category, search);
@@ -411,19 +480,25 @@ function History({ records, cards, onFilter, onNew, onContinue, onReview }: { re
     {message && <div className="management-message">{message}</div>}
     <section className="records">{visibleGroups.length ? visibleGroups.map((group, index) => {
       const latest = group.attempts[0];
-      return <article className="record-group" key={group.key}><b>{String((page - 1) * pageSize + index + 1).padStart(2, '0')}</b><div className="record-group-main"><small>{group.username ? '学员：' + group.username + ' · ' : ''}{group.category} · {group.attempts.length} 次作答</small><h3>{group.question}</h3><p className="record-latest">{formatRecordDate(latest.createdAt)} · {latest.hasAudio ? '含录音' : '无录音'} · {latest.referenceAnswer ? '有参考答案' : '暂无参考答案'}</p><div className="record-group-actions"><button className="record-open" onClick={() => setSelectedKey(group.key)}>查看详情 <span>→</span></button><button className="record-review" onClick={() => onReview(group)}>AI 复盘</button>{latest.questionId && latest.typeId && <button className="record-continue" onClick={() => onContinue(latest)}>继续作答</button>}</div></div></article>;
+      return <article className="record-group" key={group.key}><b>{String((page - 1) * pageSize + index + 1).padStart(2, '0')}</b><div className="record-group-main"><small>{group.username ? '学员：' + group.username + ' · ' : ''}{group.category} · {group.attempts.length} 次作答</small><h3>{group.question}</h3><p className="record-latest">{formatRecordDate(latest.createdAt)} · {latest.hasAudio ? '含录音' : '无录音'} · {latest.referenceAnswer ? '有参考答案' : '暂无参考答案'}</p><div className="record-group-actions"><button className="record-open" onClick={() => onReview(group)}>查看复盘 <span>→</span></button>{latest.questionId && latest.typeId && <button className="record-continue" onClick={() => onContinue(latest)}>继续作答</button>}</div></div></article>;
     }) : <div className="empty"><b>复</b><h3>还没有作答记录</h3><p>完成一次练习后，录音、答案和复盘信息会出现在这里。</p></div>}</section>
     <div className="pagination"><button disabled={page <= 1} onClick={() => setPage(page - 1)}>← 上一页</button><span>第 {page} / {totalPages} 页</span><button disabled={page >= totalPages} onClick={() => setPage(page + 1)}>下一页 →</button><form className="page-jump" onSubmit={jump}><input type="number" min="1" max={totalPages} value={jumpPage} onChange={(event) => setJumpPage(event.target.value)} /><button>跳转</button></form></div>
     {selectedGroup && <div className="modal-backdrop record-detail-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedKey(null); }}><section className="record-detail-modal" role="dialog" aria-modal="true" aria-labelledby="record-detail-title"><button type="button" className="modal-close" aria-label="关闭记录详情" onClick={() => setSelectedKey(null)}>×</button><span className="section-kicker">PRACTICE DETAIL</span><small className="record-detail-meta">{selectedGroup.username ? '学员：' + selectedGroup.username + ' · ' : ''}{selectedGroup.category} · {selectedGroup.attempts.length} 次作答</small><h2 id="record-detail-title">{selectedGroup.question}</h2><div className="record-detail-actions"><button className="review-trigger" onClick={() => { onReview(selectedGroup); setSelectedKey(null); }}>进入 AI 复盘</button>{selectedGroup.attempts[0].questionId && selectedGroup.attempts[0].typeId && <button className="modal-submit" onClick={() => { onContinue(selectedGroup.attempts[0]); setSelectedKey(null); }}>继续作答</button>}</div><section className="detail-reference">{selectedGroup.attempts[0].referenceAnswer ? <><span className="section-kicker">REFERENCE ANSWER</span><h3>参考答案</h3><p>{selectedGroup.attempts[0].referenceAnswer}</p></> : <><span className="section-kicker">REFERENCE ANSWER</span><h3>暂无参考答案</h3><p>这道题暂时没有配置参考答案。</p></>}</section><div className="detail-attempts"><h3>每次具体作答</h3>{selectedGroup.attempts.map((item, index) => <article className="detail-attempt" key={item.id}><div className="detail-attempt-head"><strong>第 {selectedGroup.attempts.length - index} 次</strong><small>{formatRecordDate(item.createdAt)}</small></div><p className="detail-answer-label">文字作答</p><p className="detail-answer">{item.answer || '本次未填写文字作答。'}</p>{item.hasAudio ? <TranscriptViewer item={item} onTranscribe={() => void transcribe(item)} /> : <p className="no-audio">这次作答没有录音。</p>}</article>)}</div><section className="ai-placeholder"><span className="section-kicker">AI REVIEW</span><h3>AI 复盘已经独立成页</h3><p>点击上方“进入 AI 复盘”，可以生成评估、查看历史比较并继续对话。</p></section></section></div>}
   </main>;
 }
-function TranscriptViewer({ item, onTranscribe }: { item: RecordItem; onTranscribe: () => void }) {
+function TranscriptViewer({ item, autoTranscribe = false, onTranscribe }: { item: RecordItem; autoTranscribe?: boolean; onTranscribe: () => void }) {
   const [mode, setMode] = useState<'full' | 'segments'>('full');
   const segments = parseTranscriptSegments(item.transcriptSegments);
   const canShowSegments = segments.length > 0;
 
   if (item.transcriptStatus === 'completed' && item.transcript) {
     return <div className="detail-audio"><audio controls preload="none" src={'/api/records/' + item.id + '/audio'} /><div className="transcript-box"><div className="transcript-toolbar"><span className="transcript-state done">录音文字稿</span>{canShowSegments && <div className="transcript-toggle"><button type="button" className={mode === 'full' ? 'active' : ''} onClick={() => setMode('full')}>完整文字</button><button type="button" className={mode === 'segments' ? 'active' : ''} onClick={() => setMode('segments')}>时间分片</button></div>}</div>{mode === 'segments' && canShowSegments ? <div className="transcript-segments">{segments.map((segment, index) => <p className="transcript-segment" key={segment.startMs + '-' + segment.endMs + '-' + index}><time>{formatTranscriptTime(segment.startMs)} - {formatTranscriptTime(segment.endMs)}</time><span>{segment.text}</span></p>)}</div> : <p>{item.transcript}</p>}</div></div>;
+  }
+  if (autoTranscribe && item.transcriptStatus === 'failed') {
+    return <div className={'detail-audio'}><audio controls preload={'none'} src={'/api/records/' + item.id + '/audio'} /><div className={'transcript-box'}><span className={'transcript-state failed'}>自动转写失败</span><p>{item.transcriptError || '自动转写失败，请联系管理员检查百炼配置。'}</p></div></div>;
+  }
+  if (autoTranscribe && item.transcriptStatus !== 'processing') {
+    return <div className={'detail-audio'}><audio controls preload={'none'} src={'/api/records/' + item.id + '/audio'} /><div className={'transcript-box'}><span className={'transcript-state pending'}>自动转写已开启</span><p>录音保存后会自动生成文字稿，请稍候查看。</p></div></div>;
   }
   if (item.transcriptStatus === 'processing') {
     return <div className="detail-audio"><audio controls preload="none" src={'/api/records/' + item.id + '/audio'} /><div className="transcript-box"><span className="transcript-state pending">正在生成文字稿…</span><p>转写服务正在处理，请稍候，页面会自动刷新。</p></div></div>;
@@ -513,7 +588,7 @@ function Users() {
 type AiEvaluation = { id: number; status: string; result: string | null; error: string | null; createdAt: string; completedAt?: string | null };
 type AiMessage = { id: number; role: 'user' | 'assistant'; content: string; evaluationId?: number | null; createdAt?: string };
 
-function ReviewPage({ group, onBack }: { group: RecordGroup; onBack: () => void }) {
+function ReviewPage({ group, autoTranscribe, onBack }: { group: RecordGroup; autoTranscribe: boolean; onBack: () => void }) {
   const [evaluations, setEvaluations] = useState<AiEvaluation[]>([]);
   const [messages, setMessages] = useState<AiMessage[]>([]);
   const [loading, setLoading] = useState(true);
@@ -560,6 +635,13 @@ function ReviewPage({ group, onBack }: { group: RecordGroup; onBack: () => void 
     } catch (error) { setMessage((error as Error).message); }
     finally { setChatLoading(false); }
   }
+  async function transcribeAttempt(item: RecordItem) {
+    try {
+      await jsonFetch('/api/records/' + item.id + '/transcription', { method: 'POST' });
+      setMessage('已开始生成文字稿，请稍候。');
+      await load();
+    } catch (error) { setMessage((error as Error).message); }
+  }
 
   const completed = evaluations.find((item) => item.status === 'completed');
   const visibleMessages = messages.filter((item) => !(item.role === 'user' && item.content.startsWith('请评估以下食品专业保研面试练习数据')));
@@ -571,12 +653,11 @@ function ReviewPage({ group, onBack }: { group: RecordGroup; onBack: () => void 
       <section className="review-main">
         <div className="review-question-card"><span className="section-kicker">QUESTION</span><h2>{group.question}</h2><div className="review-question-meta"><span>{group.category}</span><span>{group.attempts.length} 次作答</span><span>{latest.hasReferenceAnswer ? '有参考答案' : '暂无参考答案'}</span></div></div>
         <section className="review-section"><div className="review-section-title"><div><span className="section-kicker">RECENT ATTEMPTS</span><h2>最近的回答</h2></div><small>按时间倒序，最多取 3 次</small></div>{group.attempts.slice(0, 3).map((item, index) => {
-          const segments = parseTranscriptSegments(item.transcriptSegments);
-          return <article className="review-attempt" key={item.id}><div className="review-attempt-head"><strong>第 {group.attempts.length - index} 次</strong><small>{formatRecordDate(item.createdAt)}</small></div><p className="review-answer">{item.answer || '本次没有填写文字作答。'}</p>{item.hasAudio && <audio controls preload="none" src={'/api/records/' + item.id + '/audio'} />}{item.transcript && <div className="review-transcript"><span>录音转写</span><p>{item.transcript}</p>{segments.length > 0 && <div className="review-segments">{segments.map((segment, segmentIndex) => <p key={segment.startMs + '-' + segmentIndex}><time>{formatTranscriptTime(segment.startMs)} - {formatTranscriptTime(segment.endMs)}</time><span>{segment.text}</span></p>)}</div>}</div>}</article>;
+          return <article className="review-attempt" key={item.id}><div className="review-attempt-head"><strong>第 {group.attempts.length - index} 次</strong><small>{formatRecordDate(item.createdAt)}</small></div><p className="review-answer">{item.answer || '本次没有填写文字作答。'}</p>{item.hasAudio && <TranscriptViewer item={item} autoTranscribe={autoTranscribe} onTranscribe={() => void transcribeAttempt(item)} />}</article>;
         })}</section>
-        <section className="review-section"><div className="review-section-title"><div><span className="section-kicker">EVALUATIONS</span><h2>评估结果</h2></div><small>{loading ? '正在读取…' : evaluations.length + ' 次评估'}</small></div>{evaluations.length ? evaluations.map((item, index) => <article className="evaluation-card" key={item.id}><div className="evaluation-card-head"><strong>{index === 0 ? '最新评估' : '历史评估 ' + (evaluations.length - index)}</strong><small>{formatRecordDate(item.createdAt)} · {item.status === 'processing' ? '生成中' : item.status === 'completed' ? '已完成' : '失败'}</small></div>{item.status === 'processing' && <p className="evaluation-pending">AI 正在分析最近的回答，请稍候，页面会自动刷新。</p>}{item.status === 'failed' && <p className="evaluation-error">{item.error || '本次评估失败。'}</p>}{item.status === 'completed' && <div className="evaluation-result">{item.result}</div>}</article>) : <div className="review-empty">还没有评估，点击右上角按钮生成第一次评估。</div>}</section>
+        <section className="review-section"><div className="review-section-title"><div><span className="section-kicker">EVALUATIONS</span><h2>评估结果</h2></div><small>{loading ? '正在读取…' : evaluations.length + ' 次评估'}</small></div>{evaluations.length ? evaluations.map((item, index) => <article className="evaluation-card" key={item.id}><div className="evaluation-card-head"><strong>{index === 0 ? '最新评估' : '历史评估 ' + (evaluations.length - index)}</strong><small>{formatRecordDate(item.createdAt)} · {item.status === 'processing' ? '生成中' : item.status === 'completed' ? '已完成' : '失败'}</small></div>{item.status === 'processing' && <p className="evaluation-pending">AI 正在分析最近的回答，请稍候，页面会自动刷新。</p>}{item.status === 'failed' && <p className="evaluation-error">{item.error || '本次评估失败。'}</p>}{item.status === 'completed' && <MarkdownContent value={item.result || ''} className="evaluation-result" />}</article>) : <div className="review-empty">还没有评估，点击右上角按钮生成第一次评估。</div>}</section>
       </section>
-      <aside className="review-side"><div className="review-side-head"><span className="section-kicker">COACH CHAT</span><h2>继续和教练对话</h2><p>对话只属于这个学员和这道题，会记住之前的评估与追问。</p></div><div className="chat-messages">{visibleMessages.length ? visibleMessages.map((item) => <div className={'chat-message ' + item.role} key={item.id}><span>{item.role === 'assistant' ? 'AI 教练' : '你'}</span><div>{item.content}</div></div>) : <div className="chat-empty">生成评估后，可以继续追问“如何改进这道题的回答？”</div>}</div><form className="chat-form" onSubmit={sendChat}><textarea value={chatInput} onChange={(event) => setChatInput(event.target.value)} placeholder="例如：请把我的回答改成 90 秒的结构化版本。" disabled={!completed || chatLoading} /><button disabled={!completed || chatLoading || !chatInput.trim()}>{chatLoading ? '发送中…' : '发送消息'}</button></form></aside>
+      <aside className="review-side"><div className="review-side-head"><span className="section-kicker">COACH CHAT</span><h2>继续和教练对话</h2><p>对话只属于这个学员和这道题，会记住之前的评估与追问。</p></div><div className="chat-messages">{visibleMessages.length ? visibleMessages.map((item) => <div className={'chat-message ' + item.role} key={item.id}><span>{item.role === 'assistant' ? 'AI 教练' : '你'}</span><MarkdownContent value={item.content} /></div>) : <div className="chat-empty">生成评估后，可以继续追问“如何改进这道题的回答？”</div>}</div><form className="chat-form" onSubmit={sendChat}><textarea value={chatInput} onChange={(event) => setChatInput(event.target.value)} placeholder="例如：请把我的回答改成 90 秒的结构化版本。" disabled={!completed || chatLoading} /><button disabled={!completed || chatLoading || !chatInput.trim()}>{chatLoading ? '发送中…' : '发送消息'}</button></form></aside>
     </div>}
   </main>;
 }
@@ -586,24 +667,111 @@ function Management() {
   return <main className="management-hub"><header className="management-hub-head"><div><p className="eyebrow">— ADMIN CONSOLE</p><h1>管理后台</h1><p>集中管理用户、题库和 AI 评估配置，后续可以继续扩展更多工具。</p></div></header><nav className="management-tabs"><button className={tab === 'users' ? 'active' : ''} onClick={() => setTab('users')}>用户管理<span>注册审批与账号</span></button><button className={tab === 'questions' ? 'active' : ''} onClick={() => setTab('questions')}>题库管理<span>题目与 Excel</span></button><button className={tab === 'ai' ? 'active' : ''} onClick={() => setTab('ai')}>AI 模型管理<span>平台、模型与提示词</span></button></nav><div className="management-hub-content">{tab === 'users' ? <Users /> : tab === 'questions' ? <QuestionBank /> : <AiConfig />}</div></main>;
 }
 
-type AiClientConfig = { provider: string; baseUrl: string; model: string; apiKeySet: boolean; apiKeyPreview: string; systemPrompt: string };
+type AiModelConfig = { id: number; name: string; provider: string; baseUrl: string; model: string; apiKeySet: boolean; apiKeyPreview: string; apiKey?: string };
+type AiPrompt = { id: number; name: string; content: string };
+type AiConfigState = { configs: AiModelConfig[]; prompts: AiPrompt[]; activeConfigId: number; activePromptId: number; autoTranscribe: boolean };
+
+const providerDefaults: Record<string, string> = {
+  bailian: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  siliconflow: 'https://api.siliconflow.cn/v1',
+  openai: 'https://api.openai.com/v1',
+  custom: '',
+};
+const providerNames: Record<string, string> = { bailian: '阿里云百炼', siliconflow: '硅基流动', openai: 'OpenAI 兼容接口', custom: '自定义平台' };
+const modelPresets: Record<string, string[]> = {
+  bailian: ['qwen3.8-27b', 'qwen-plus', 'qwen-max'],
+  siliconflow: ['Qwen/Qwen3-235B-A22B-Instruct-2507', 'Qwen/Qwen3-32B', 'deepseek-ai/DeepSeek-V3'],
+  openai: ['gpt-4o-mini', 'gpt-4.1-mini', '自定义模型'],
+  custom: [],
+};
 
 function AiConfig() {
-  const [config, setConfig] = useState<AiClientConfig | null>(null);
-  const [apiKey, setApiKey] = useState('');
+  const [state, setState] = useState<AiConfigState>({ configs: [], prompts: [], activeConfigId: 0, activePromptId: 0, autoTranscribe: false });
+  const [editingModel, setEditingModel] = useState<(AiModelConfig & { apiKey?: string }) | null>(null);
+  const [editingPrompt, setEditingPrompt] = useState<AiPrompt | null>(null);
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  useEffect(() => { void jsonFetch('/api/ai/config').then((data) => setConfig(data.config)).catch((error) => setMessage((error as Error).message)).finally(() => setLoading(false)); }, []);
+
+  const load = useCallback(async () => {
+    try { setState(await jsonFetch('/api/ai/config')); }
+    catch (error) { setMessage((error as Error).message); }
+    finally { setLoading(false); }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
   if (loading) return <section className="ai-config-page"><p>正在读取 AI 配置…</p></section>;
-  if (!config) return <section className="ai-config-page"><p className="evaluation-error">暂无 AI 配置，请重新加载数据库。</p></section>;
-  async function save(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setSaving(true); setMessage('');
+  if (!state) return <section className="ai-config-page"><p className="evaluation-error">暂无 AI 配置，请重新加载数据库。</p></section>;
+
+  const activeModel = state.configs.find((item) => item.id === state.activeConfigId) || state.configs[0];
+  const activePrompt = state.prompts.find((item) => item.id === state.activePromptId) || state.prompts[0];
+  const providerModelOptions = modelPresets[editingModel?.provider || 'custom'] || [];
+  const currentModelIsPreset = Boolean(editingModel && providerModelOptions.includes(editingModel.model));
+
+  function newModel() {
+    setEditingModel({ id: 0, name: '', provider: 'bailian', baseUrl: providerDefaults.bailian, model: 'qwen3.8-27b', apiKeySet: false, apiKeyPreview: '', apiKey: '' });
+  }
+  function editModel(model: AiModelConfig) { setEditingModel({ ...model, apiKey: '' }); }
+  function newPrompt() { setEditingPrompt({ id: 0, name: '', content: '' }); }
+  function editPrompt(prompt: AiPrompt) { setEditingPrompt({ ...prompt }); }
+
+  async function saveModel(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); if (!editingModel) return;
+    setSaving(true); setMessage('');
     try {
-      const data = await jsonFetch('/api/ai/config', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...config, apiKey }) });
-      setConfig(data.config); setApiKey(''); setMessage('AI 配置已保存');
+      const data = await jsonFetch('/api/ai/config', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ activeConfigId: editingModel.id || state.activeConfigId, activePromptId: state.activePromptId, autoTranscribe: state.autoTranscribe, config: { id: editingModel.id || undefined, name: editingModel.name, provider: editingModel.provider, baseUrl: editingModel.baseUrl, model: editingModel.model, apiKey: editingModel.apiKey || '' } }) });
+      setState(data); setEditingModel(null); setMessage('模型配置已保存并设为当前配置');
     } catch (error) { setMessage((error as Error).message); }
     finally { setSaving(false); }
   }
-  return <section className="ai-config-page"><div className="ai-config-intro"><span className="section-kicker">MODEL SETTINGS</span><h2>AI 评估模型</h2><p>API Key 只保存在服务器数据库中，页面不会回显完整密钥。接口需要兼容 OpenAI Chat Completions 格式，方便后续切换平台。</p></div>{message && <div className="management-message">{message}</div>}<form className="ai-config-form" onSubmit={save}><label>API 平台<input value={config.provider} onChange={(event) => setConfig({ ...config, provider: event.target.value })} placeholder="例如：bailian" /></label><label>兼容接口地址<input type="url" value={config.baseUrl} onChange={(event) => setConfig({ ...config, baseUrl: event.target.value })} placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1" /></label><label>模型名称<input value={config.model} onChange={(event) => setConfig({ ...config, model: event.target.value })} placeholder="qwen3.8-27b" /></label><label>API Key{config.apiKeySet && <small className="key-preview">当前：{config.apiKeyPreview}（留空表示不修改）</small>}<input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={config.apiKeySet ? '留空保持当前 Key' : '粘贴 API Key'} autoComplete="off" /></label><label className="prompt-field">评估系统提示词<textarea value={config.systemPrompt} onChange={(event) => setConfig({ ...config, systemPrompt: event.target.value })} /></label><button className="modal-submit" disabled={saving}>{saving ? '保存中…' : '保存 AI 配置'}</button></form></section>;
+  async function savePrompt(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); if (!editingPrompt) return;
+    setSaving(true); setMessage('');
+    try {
+      const data = await jsonFetch('/api/ai/config', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ activeConfigId: state.activeConfigId, activePromptId: editingPrompt.id || state.activePromptId, autoTranscribe: state.autoTranscribe, prompt: { id: editingPrompt.id || undefined, name: editingPrompt.name, content: editingPrompt.content } }) });
+      setState(data); setEditingPrompt(null); setMessage('提示词已保存并设为当前提示词');
+    } catch (error) { setMessage((error as Error).message); }
+    finally { setSaving(false); }
+  }
+  async function selectActive(configId: number, promptId = state.activePromptId) {
+    try {
+      const data = await jsonFetch('/api/ai/config', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ activeConfigId: configId, activePromptId: promptId, autoTranscribe: state.autoTranscribe }) });
+      setState(data); setMessage('当前 AI 配置已切换');
+    } catch (error) { setMessage((error as Error).message); }
+  }
+  async function toggleAutoTranscribe() {
+    try {
+      const data = await jsonFetch('/api/ai/config', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ activeConfigId: state.activeConfigId, activePromptId: state.activePromptId, autoTranscribe: !state.autoTranscribe }) });
+      setState(data); setMessage(data.autoTranscribe ? '已开启保存录音后的自动转写' : '已关闭自动转写，学员可手动生成文字稿');
+    } catch (error) { setMessage((error as Error).message); }
+  }
+  async function removeModel(id: number) {
+    if (!window.confirm('确定删除这个模型配置吗？')) return;
+    try { const data = await jsonFetch('/api/ai/config', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deleteConfigId: id, activeConfigId: state.activeConfigId, activePromptId: state.activePromptId, autoTranscribe: state.autoTranscribe }) }); setState(data); setMessage('模型配置已删除'); }
+    catch (error) { setMessage((error as Error).message); }
+  }
+  async function removePrompt(id: number) {
+    if (!window.confirm('确定删除这个提示词吗？')) return;
+    try { const data = await jsonFetch('/api/ai/config', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deletePromptId: id, activeConfigId: state.activeConfigId, activePromptId: state.activePromptId, autoTranscribe: state.autoTranscribe }) }); setState(data); setMessage('提示词已删除'); }
+    catch (error) { setMessage((error as Error).message); }
+  }
+
+  return <section className="ai-config-page">
+    <div className="ai-config-intro"><span className="section-kicker">AI CONTROL CENTER</span><h2>模型与提示词</h2><p>模型配置、评估提示词和录音自动转写均由管理员控制。密钥只保存于服务器，不会在页面中回显。</p></div>
+    {message && <div className="management-message">{message}</div>}
+    <div className="ai-config-grid">
+      <section className="ai-panel"><div className="ai-panel-head"><div><span className="section-kicker">MODEL CONFIGURATIONS</span><h3>模型配置</h3></div><button type="button" className="create-trigger small-trigger" onClick={newModel}>＋ 新增配置</button></div>
+        <label className="ai-active-select">当前使用的模型<select value={state.activeConfigId} onChange={(event) => void selectActive(Number(event.target.value))}>{state.configs.map((item) => <option key={item.id} value={item.id}>{item.name} · {providerNames[item.provider] || item.provider} · {item.model}</option>)}</select></label>
+        {activeModel && <div className="ai-active-summary"><strong>{activeModel.name}</strong><span>{providerNames[activeModel.provider] || activeModel.provider} · {activeModel.model}</span><small>{activeModel.apiKeySet ? 'API Key 已配置' : '尚未配置 API Key'}</small></div>}
+        <div className="ai-config-list">{state.configs.map((item) => <article className={item.id === state.activeConfigId ? 'ai-config-card active' : 'ai-config-card'} key={item.id}><div><strong>{item.name}</strong><span>{providerNames[item.provider] || item.provider} · {item.model}</span></div><div className="ai-card-actions"><button type="button" onClick={() => editModel(item)}>编辑</button><button type="button" className="danger-text" disabled={item.id === state.activeConfigId} onClick={() => void removeModel(item.id)}>删除</button></div></article>)}</div>
+        {editingModel && <form className="ai-editor" onSubmit={saveModel}><div className="ai-editor-title"><strong>{editingModel.id ? '编辑模型配置' : '新增模型配置'}</strong><button type="button" onClick={() => setEditingModel(null)}>取消</button></div><label>配置名称<input required value={editingModel.name} onChange={(event) => setEditingModel({ ...editingModel, name: event.target.value })} placeholder="例如：百炼面试评估" /></label><label>模型平台<select value={editingModel.provider} onChange={(event) => setEditingModel({ ...editingModel, provider: event.target.value, baseUrl: providerDefaults[event.target.value] || editingModel.baseUrl, model: (modelPresets[event.target.value] || [])[0] || '' })}>{Object.keys(providerNames).map((provider) => <option key={provider} value={provider}>{providerNames[provider]}</option>)}</select></label><label>兼容接口地址<input required type="url" value={editingModel.baseUrl} onChange={(event) => setEditingModel({ ...editingModel, baseUrl: event.target.value })} /></label><label>模型名称<select value={currentModelIsPreset ? editingModel.model : '__custom__'} onChange={(event) => setEditingModel({ ...editingModel, model: event.target.value === '__custom__' ? '' : event.target.value })}>{providerModelOptions.map((model) => <option key={model} value={model}>{model}</option>)}<option value="__custom__">自定义模型名称</option></select>{(!currentModelIsPreset || !editingModel.model) && <input required value={editingModel.model} onChange={(event) => setEditingModel({ ...editingModel, model: event.target.value })} placeholder="输入模型名称" />}</label><label>API Key {editingModel.apiKeySet && <small className="key-preview">当前：{editingModel.apiKeyPreview}（留空不修改）</small>}<input type="password" value={editingModel.apiKey || ''} onChange={(event) => setEditingModel({ ...editingModel, apiKey: event.target.value })} placeholder={editingModel.apiKeySet ? '留空保持当前 Key' : '粘贴 API Key'} autoComplete="off" /></label><button className="modal-submit" disabled={saving}>{saving ? '保存中…' : '保存并启用配置'}</button></form>}
+      </section>
+      <section className="ai-panel"><div className="ai-panel-head"><div><span className="section-kicker">PROMPT LIBRARY</span><h3>评估提示词</h3></div><button type="button" className="create-trigger small-trigger" onClick={newPrompt}>＋ 新增提示词</button></div>
+        <label className="ai-active-select">当前使用的提示词<select value={state.activePromptId} onChange={(event) => void selectActive(state.activeConfigId, Number(event.target.value))}>{state.prompts.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+        {activePrompt && <div className="ai-active-summary prompt-summary"><strong>{activePrompt.name}</strong><span>{activePrompt.content.slice(0, 150)}{activePrompt.content.length > 150 ? '…' : ''}</span></div>}
+        <div className="ai-prompt-list">{state.prompts.map((item) => <article className={item.id === state.activePromptId ? 'ai-prompt-card active' : 'ai-prompt-card'} key={item.id}><div><strong>{item.name}</strong><p>{item.content.slice(0, 110)}{item.content.length > 110 ? '…' : ''}</p></div><div className="ai-card-actions"><button type="button" onClick={() => editPrompt(item)}>编辑</button><button type="button" className="danger-text" disabled={item.id === state.activePromptId} onClick={() => void removePrompt(item.id)}>删除</button></div></article>)}</div>
+        {editingPrompt && <form className="ai-editor" onSubmit={savePrompt}><div className="ai-editor-title"><strong>{editingPrompt.id ? '编辑提示词' : '新增提示词'}</strong><button type="button" onClick={() => setEditingPrompt(null)}>取消</button></div><label>提示词名称<input required value={editingPrompt.name} onChange={(event) => setEditingPrompt({ ...editingPrompt, name: event.target.value })} placeholder="例如：食品专业面试评估" /></label><label>提示词内容<textarea required value={editingPrompt.content} onChange={(event) => setEditingPrompt({ ...editingPrompt, content: event.target.value })} placeholder="写清楚角色、输入内容、评价维度和输出格式。" /></label><button className="modal-submit" disabled={saving}>{saving ? '保存中…' : '保存并启用提示词'}</button></form>}
+      </section>
+    </div>
+    <section className="ai-automation"><div><span className="section-kicker">AUDIO PIPELINE</span><h3>录音后自动转写</h3><p>开启后，学员保存带录音的回答时，系统会自动提交百炼 Paraformer 转写；页面不再显示手动生成按钮。</p></div><button type="button" className={state.autoTranscribe ? 'switch on' : 'switch'} onClick={() => void toggleAutoTranscribe()} aria-label="切换自动转写"><i /></button></section>
+  </section>;
 }
