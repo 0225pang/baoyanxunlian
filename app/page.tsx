@@ -61,7 +61,8 @@ function formatTranscriptTime(milliseconds: number) {
 }
 
 function markdownInline(value: string): ReactNode[] {
-  return value.split(/(\*\*[\s\S]+?\*\*|`[^`]+`|\[[^\]]+\]\([^\)]+\))/g).filter(Boolean).map((part, index) => {
+  const normalized = value.replace(/\\\*\\\*/g, '**');
+  return normalized.split(/(\*\*[\s\S]+?\*\*|`[^`]+`|\[[^\]]+\]\([^\)]+\))/g).filter(Boolean).map((part, index) => {
     if (part.startsWith('**') && part.endsWith('**')) return <strong key={index}>{part.slice(2, -2)}</strong>;
     if (part.startsWith('`') && part.endsWith('`')) return <code key={index}>{part.slice(1, -1)}</code>;
     const link = part.match(/^\[([^\]]+)\]\(([^\)]+)\)$/);
@@ -595,10 +596,12 @@ type AiMessage = { id: number; role: 'user' | 'assistant'; content: string; eval
 
 function ReviewPage({ group, autoTranscribe, onBack }: { group: RecordGroup; autoTranscribe: boolean; onBack: () => void }) {
   const [evaluations, setEvaluations] = useState<AiEvaluation[]>([]);
+  const [expandedEvaluationIds, setExpandedEvaluationIds] = useState<number[] | null>(null);
   const [messages, setMessages] = useState<AiMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [chatLoading, setChatLoading] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
   const [chatInput, setChatInput] = useState('');
   const [message, setMessage] = useState('');
   const questionId = group.questionId;
@@ -634,9 +637,36 @@ function ReviewPage({ group, autoTranscribe, onBack }: { group: RecordGroup; aut
     const content = chatInput.trim();
     if (!content || !questionId || chatLoading) return;
     setChatLoading(true); setMessage('');
+    const clientId = -Date.now();
+    setMessages((current) => [...current, { id: clientId - 1, role: 'user', content }, { id: clientId, role: 'assistant', content: '' }]);
+    setChatInput('');
     try {
-      await jsonFetch('/api/ai/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ questionId, userId: group.userId, message: content }) });
-      setChatInput(''); await load();
+      const response = await fetch('/api/ai/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' }, body: JSON.stringify({ questionId, userId: group.userId, message: content }) });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || '发送失败');
+      }
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('浏览器不支持流式响应');
+      const decoder = new TextDecoder(); let buffer = '';
+      const applyEvent = (raw: string) => {
+        const line = raw.split(/\r?\n/).find((item) => item.startsWith('data:'));
+        if (!line) return;
+        try {
+          const payload = JSON.parse(line.slice(5).trim()) as { type?: string; content?: string; error?: string };
+          if (payload.type === 'delta' && payload.content) setMessages((current) => current.map((item) => item.id === clientId ? { ...item, content: item.content + payload.content } : item));
+          if (payload.type === 'error') throw new Error(payload.error || '对话生成失败');
+        } catch (error) { if (error instanceof Error) throw error; }
+      };
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split(/\r?\n\r?\n/); buffer = events.pop() || '';
+        events.forEach(applyEvent);
+      }
+      if (buffer.trim()) applyEvent(buffer);
+      await load();
     } catch (error) { setMessage((error as Error).message); }
     finally { setChatLoading(false); }
   }
@@ -650,10 +680,10 @@ function ReviewPage({ group, autoTranscribe, onBack }: { group: RecordGroup; aut
 
   const completed = evaluations.find((item) => item.status === 'completed');
   return <main className="review-page">
-    <header className="review-hero">
-      <div className="review-topbar"><button className="review-back" onClick={onBack} aria-label="返回作答记录">返回作答记录</button><span className="review-user">{group.username ? '学员：' + group.username : '我的复盘'}</span></div>
-      <div className="review-hero-content"><div><p className="eyebrow">AI PRACTICE REVIEW</p><h1>把一次作答，练成一次进步</h1><p>围绕同一道题梳理表达、录音转写与 AI 反馈；最近三次作答会共同作为分析依据。</p></div><button className="review-generate" disabled={!questionId || generating} onClick={() => void generate()}>{generating ? '正在提交…' : completed ? '检查新回答并评估' : '生成 AI 评估'}</button></div>
-      <div className="review-stats" aria-label="本题训练概览"><span><b>{group.attempts.length}</b>次作答</span><span><b>{evaluations.length}</b>次评估</span><span><b>{latest.hasReferenceAnswer ? '有' : '无'}</b>参考答案</span></div>
+    <header className="review-hero review-toolbar">
+      <button className="review-back" onClick={onBack} aria-label="返回作答记录">返回作答记录</button>
+      <div className="review-toolbar-title"><span className="section-kicker">QUESTION REVIEW</span><h1>问题复盘</h1></div>
+      <div className="review-toolbar-actions"><button className="review-chat-open" onClick={() => setChatOpen(true)}>和小鱼讨论</button><button className="review-generate" disabled={!questionId || generating} onClick={() => void generate()}>{generating ? '正在提交…' : completed ? '更新评估' : '生成评估'}</button></div>
     </header>
     {message && <div className="management-message">{message}</div>}
     {!questionId ? <div className="empty"><h3>原题目已经不存在</h3><p>这条记录缺少题目编号，暂时无法建立独立的 AI 对话。</p></div> : <div className="review-grid">
@@ -663,9 +693,9 @@ function ReviewPage({ group, autoTranscribe, onBack }: { group: RecordGroup; aut
           return <article className="review-attempt" key={item.id}><div className="review-attempt-head"><strong>第 {group.attempts.length - index} 次</strong><small>{formatRecordDate(item.createdAt)}</small></div><p className="review-answer">{item.answer || '本次没有填写文字作答。'}</p>{item.hasAudio && <TranscriptViewer item={item} autoTranscribe={autoTranscribe} onTranscribe={() => void transcribeAttempt(item)} />}</article>;
         })}</section>
       </section>
-      <section className="review-evaluations review-section"><div className="review-section-title"><div><span className="section-kicker">EVALUATIONS</span><h2>评估结果</h2></div><small>{loading ? '正在读取…' : evaluations.length + ' 次评估'}</small></div>{evaluations.length ? evaluations.map((item, index) => <details className="evaluation-card" key={item.id} open={index === 0}><summary><span><strong>{index === 0 ? '最新评估' : '历史评估 ' + (evaluations.length - index)}</strong><small>{formatRecordDate(item.createdAt)}</small></span><em>{item.status === 'processing' ? '生成中' : item.status === 'completed' ? '已完成' : '失败'}</em></summary>{item.status === 'processing' && <p className="evaluation-pending">AI 正在分析最近的回答，请稍候，页面会自动刷新。</p>}{item.status === 'failed' && <p className="evaluation-error">{item.error || '本次评估失败。'}</p>}{item.status === 'completed' && <MarkdownContent value={item.result || ''} className="evaluation-result" />}</details>) : <div className="review-empty">还没有评估。生成评估后，这里会保留每一次可展开查看的反馈。</div>}</section>
-      <aside className="review-side"><div className="review-side-head"><span className="section-kicker">COACH CHAT</span><h2>和 AI 教练继续练</h2><p>这里只显示你和教练的对话。题目与最近作答会作为对话背景提供给 AI。</p></div><div className="chat-messages">{messages.length ? messages.map((item) => <div className={'chat-message ' + item.role} key={item.id}><span>{item.role === 'assistant' ? 'AI 教练' : '你'}</span><MarkdownContent value={item.content} /></div>) : <div className="chat-empty">还没有对话。你可以直接请教练帮你优化这道题的回答。</div>}</div><form className="chat-form" onSubmit={sendChat}><textarea value={chatInput} onChange={(event) => setChatInput(event.target.value)} placeholder="例如：请把我的回答改成 90 秒的结构化版本。" disabled={chatLoading} /><button disabled={chatLoading || !chatInput.trim()}>{chatLoading ? '发送中…' : '发送消息'}</button></form></aside>
+      <section className="review-evaluations review-section"><div className="review-section-title"><div><span className="section-kicker">EVALUATIONS</span><h2>评估结果</h2></div><small>{loading ? '正在读取…' : evaluations.length + ' 次评估'}</small></div>{evaluations.length ? evaluations.map((item, index) => <details className="evaluation-card" key={item.id} open={expandedEvaluationIds ? expandedEvaluationIds.includes(item.id) : index === 0} onToggle={(event) => setExpandedEvaluationIds((current) => { const next = new Set(current ?? evaluations.filter((_value, position) => position === 0).map((value) => value.id)); if (event.currentTarget.open) next.add(item.id); else next.delete(item.id); return [...next]; })}><summary><span><strong>{index === 0 ? '最新评估' : '历史评估 ' + (evaluations.length - index)}</strong><small>{formatRecordDate(item.createdAt)}</small></span><em>{item.status === 'processing' ? '生成中' : item.status === 'completed' ? '已完成' : '失败'}</em></summary>{item.status === 'processing' && <p className="evaluation-pending">AI 正在分析最近的回答，请稍候，页面会自动刷新。</p>}{item.status === 'failed' && <p className="evaluation-error">{item.error || '本次评估失败。'}</p>}{item.status === 'completed' && <MarkdownContent value={item.result || ''} className="evaluation-result" />}</details>) : <div className="review-empty">还没有评估。生成评估后，这里会保留每一次可展开查看的反馈。</div>}</section>
     </div>}
+    {chatOpen && <div className="chat-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !chatLoading) setChatOpen(false); }}><section className="chat-modal" role="dialog" aria-modal="true" aria-labelledby="chat-modal-title"><div className="chat-modal-head"><div><span className="section-kicker">QUESTION DISCUSSION</span><h2 id="chat-modal-title">和小鱼讨论</h2><p>围绕这道题追问、打磨表达或模拟追问。</p></div><button className="chat-modal-close" aria-label="关闭对话" disabled={chatLoading} onClick={() => setChatOpen(false)}>×</button></div><div className="chat-messages">{messages.length ? messages.map((item) => <div className={'chat-message ' + item.role} key={item.id}><MarkdownContent value={item.content || (chatLoading ? '正在思考…' : '')} /></div>) : <div className="chat-empty">还没有对话。试着让小鱼把你的回答打磨得更清晰、有说服力。</div>}</div><form className="chat-form" onSubmit={sendChat}><textarea value={chatInput} onChange={(event) => setChatInput(event.target.value)} placeholder="例如：请把我的回答改成 90 秒的结构化版本。" disabled={chatLoading} /><button disabled={chatLoading || !chatInput.trim()}>{chatLoading ? '生成中…' : '发送'}</button></form></section></div>}
   </main>;
 }
 

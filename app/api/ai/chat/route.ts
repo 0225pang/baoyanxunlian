@@ -3,6 +3,15 @@ import { execute, query } from '@/lib/db';
 import { chatCompletionsUrl, extractChatContent, getActiveAiConfig, safeJsonParse } from '@/lib/ai';
 import type { RowDataPacket } from 'mysql2/promise';
 
+function streamContent(payload: unknown) {
+  if (!payload || typeof payload !== 'object') return '';
+  const first = (payload as { choices?: Array<{ delta?: { content?: unknown }; message?: { content?: unknown } }> }).choices?.[0];
+  const delta = first?.delta?.content;
+  if (typeof delta === 'string') return delta;
+  const message = first?.message?.content;
+  return typeof message === 'string' ? message : '';
+}
+
 async function targetUserId(currentId: number, role: string, value: unknown) {
   const requested = Number(value == null ? currentId : value);
   if (!Number.isInteger(requested) || requested <= 0 || (role !== 'admin' && requested !== currentId)) throw new Error('FORBIDDEN');
@@ -46,19 +55,59 @@ export async function POST(request: Request) {
     await execute('INSERT INTO ai_messages (user_id, question_id, role, content) VALUES (?, ?, ?, ?)', [userId, questionId, 'user', message]);
     const response = await fetch(chatCompletionsUrl(config.baseUrl), {
       method: 'POST',
-      headers: { Authorization: 'Bearer ' + config.apiKey, 'Content-Type': 'application/json' },
+      headers: { Authorization: 'Bearer ' + config.apiKey, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
       body: JSON.stringify({ model: config.model, temperature: 0.35, messages: [
         { role: 'system', content: config.systemPrompt },
         { role: 'system', content: '以下是本轮对话的训练背景，请据此回答，但不要复述整段背景：\n' + JSON.stringify(trainingContext) },
         ...history, { role: 'user', content: message },
-      ] }),
+      ], stream: true }),
     });
-    const raw = await response.text();
-    const payload = safeJsonParse(raw);
-    if (!response.ok) return Response.json({ error: 'AI 请求失败 ' + response.status + ': ' + raw.slice(0, 500) }, { status: 502 });
-    const reply = extractChatContent(payload);
-    if (!reply) return Response.json({ error: 'AI 返回内容为空' }, { status: 502 });
-    await execute('INSERT INTO ai_messages (user_id, question_id, role, content) VALUES (?, ?, ?, ?)', [userId, questionId, 'assistant', reply]);
-    return Response.json({ message: { role: 'assistant', content: reply } });
+    if (!response.ok) {
+      const raw = await response.text();
+      return Response.json({ error: 'AI 请求失败 ' + response.status + ': ' + raw.slice(0, 500) }, { status: 502 });
+    }
+
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        const send = (payload: Record<string, string>) => controller.enqueue(encoder.encode('data: ' + JSON.stringify(payload) + '\n\n'));
+        try {
+          if (!response.body) throw new Error('AI 未返回可读取的数据流');
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = ''; let raw = ''; let source = ''; let reply = '';
+          const consumeLine = (line: string) => {
+            if (!line.startsWith('data:')) return;
+            const value = line.slice(5).trim();
+            if (!value || value === '[DONE]') return;
+            raw += value;
+            const content = streamContent(safeJsonParse(value));
+            if (content) { reply += content; send({ type: 'delta', content }); }
+          };
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            const text = decoder.decode(value, { stream: true });
+            source += text; buffer += text;
+            const lines = buffer.split(/\r?\n/); buffer = lines.pop() || '';
+            lines.forEach(consumeLine);
+          }
+          if (buffer) consumeLine(buffer);
+          // Some compatible platforms ignore stream=true and return one JSON body.
+          if (!reply && (raw || source)) {
+            const fallback = extractChatContent(safeJsonParse(raw || source));
+            if (fallback) { reply = fallback; send({ type: 'delta', content: fallback }); }
+          }
+          if (!reply) throw new Error('AI 返回内容为空');
+          await execute('INSERT INTO ai_messages (user_id, question_id, role, content) VALUES (?, ?, ?, ?)', [userId, questionId, 'assistant', reply]);
+          send({ type: 'done', content: '' });
+        } catch (error) {
+          send({ type: 'error', error: error instanceof Error ? error.message : String(error) });
+        } finally {
+          controller.close();
+        }
+      },
+    });
+    return new Response(stream, { headers: { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive' } });
   } catch (error) { return apiError(error); }
 }
