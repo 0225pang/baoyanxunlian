@@ -15,7 +15,7 @@ export async function GET(request: Request) {
       q.type_id AS typeId, q.subcategory, q.answer AS referenceAnswer,
       (q.answer IS NOT NULL AND CHAR_LENGTH(TRIM(q.answer)) > 0) AS hasReferenceAnswer,
       r.audio_data IS NOT NULL AS hasAudio,
-      r.transcript, r.transcript_status AS transcriptStatus, r.transcript_error AS transcriptError,
+      r.transcript, r.transcript_segments AS transcriptSegments, r.transcript_status AS transcriptStatus, r.transcript_error AS transcriptError,
       DATE_FORMAT(r.transcribed_at, '%Y-%m-%dT%H:%i:%s') AS transcribedAt,
       DATE_FORMAT(r.created_at, '%Y-%m-%dT%H:%i:%s') AS createdAt,
       u.username AS username, u.display_name AS displayName

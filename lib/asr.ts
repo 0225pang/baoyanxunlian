@@ -61,6 +61,53 @@ export function verifyAudioToken(token: string, recordId: number, secret: string
   return actualBuffer.length === expectedBuffer.length && timingSafeEqual(actualBuffer, expectedBuffer);
 }
 
+export type TranscriptSegment = {
+  startMs: number;
+  endMs: number;
+  text: string;
+};
+
+export function extractTranscriptSegments(value: unknown): TranscriptSegment[] {
+  const collected: TranscriptSegment[] = [];
+
+  function visit(node: unknown) {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      node.forEach(visit);
+      return;
+    }
+
+    const object = node as Record<string, unknown>;
+    const sentences = object.sentences;
+    if (Array.isArray(sentences)) {
+      for (const sentence of sentences) {
+        if (!sentence || typeof sentence !== 'object') continue;
+        const item = sentence as Record<string, unknown>;
+        const startMs = Number(item.begin_time);
+        const endMs = Number(item.end_time);
+        const text = typeof item.text === 'string' ? item.text.trim() : '';
+        if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs >= startMs && text) {
+          collected.push({ startMs, endMs, text });
+        }
+      }
+    }
+
+    for (const key of ['transcripts', 'output', 'result', 'data', 'choices']) {
+      visit(object[key]);
+    }
+  }
+
+  visit(value);
+  const seen = new Set<string>();
+  return collected
+    .filter((segment) => {
+      const key = segment.startMs + ':' + segment.endMs + ':' + segment.text;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => a.startMs - b.startMs);
+}
 export function extractTranscript(value: unknown): string {
   if (!value) return '';
   if (typeof value === 'string') return value.trim();

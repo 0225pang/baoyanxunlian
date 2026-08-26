@@ -10,7 +10,8 @@ type ManagedUser = User & { status: 'pending' | 'active' | 'rejected' };
 type Question = { id: number; typeId: number; typeCode: string; category: Category; content: string; subcategory?: string | null; hasAnswer?: number };
 type QuestionType = { id: number; code: string; name: string; description: string | null; sortOrder?: number };
 type BankQuestion = { id: number; typeId: number; typeName: string; content: string; answer: string | null; subcategory: string | null; status: string; extra?: unknown };
-type RecordItem = { id: number; userId: number; questionId: number | null; typeId?: number | null; category: Category; question: string; answer: string; subcategory?: string | null; referenceAnswer?: string | null; hasReferenceAnswer?: number; hasAudio: number; transcript?: string | null; transcriptStatus?: string; transcriptError?: string | null; transcribedAt?: string | null; createdAt: string; username?: string; displayName?: string };
+type TranscriptSegment = { startMs: number; endMs: number; text: string };
+type RecordItem = { id: number; userId: number; questionId: number | null; typeId?: number | null; category: Category; question: string; answer: string; subcategory?: string | null; referenceAnswer?: string | null; hasReferenceAnswer?: number; hasAudio: number; transcript?: string | null; transcriptSegments?: TranscriptSegment[] | string | null; transcriptStatus?: string; transcriptError?: string | null; transcribedAt?: string | null; createdAt: string; username?: string; displayName?: string };
 type RecordGroup = { key: string; userId: number; questionId: number | null; category: Category; question: string; username?: string; attempts: RecordItem[] };
 type Page = 'home' | 'answer' | 'history' | 'settings' | 'users' | 'question-bank';
 
@@ -30,6 +31,34 @@ function formatRecordDate(value: string) {
   return Number.isNaN(date.getTime()) ? '时间未知' : date.toLocaleString('zh-CN');
 }
 
+function parseTranscriptSegments(value: unknown): TranscriptSegment[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is TranscriptSegment => {
+      if (!item || typeof item !== 'object') return false;
+      const candidate = item as Partial<TranscriptSegment>;
+      return Number.isFinite(Number(candidate.startMs)) && Number.isFinite(Number(candidate.endMs)) && typeof candidate.text === 'string';
+    }).map((item) => ({
+      startMs: Number(item.startMs),
+      endMs: Number(item.endMs),
+      text: item.text,
+    }));
+  }
+  if (typeof value === 'string') {
+    try {
+      return parseTranscriptSegments(JSON.parse(value));
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function formatTranscriptTime(milliseconds: number) {
+  const seconds = Math.max(0, milliseconds) / 1000;
+  if (seconds < 60) return seconds.toFixed(1) + 's';
+  const minutes = Math.floor(seconds / 60);
+  return String(minutes).padStart(2, '0') + ':' + (seconds % 60).toFixed(1).padStart(4, '0');
+}
 export default function Home() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -41,6 +70,7 @@ export default function Home() {
   const [records, setRecords] = useState<RecordItem[]>([]);
   const [autoRecord, setAutoRecord] = useState(true);
   const [avoidRepeated, setAvoidRepeated] = useState(false);
+  const [readQuestion, setReadQuestion] = useState(false);
   const [recording, setRecording] = useState(false);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [referenceAnswer, setReferenceAnswer] = useState<string | null>(null);
@@ -77,7 +107,7 @@ export default function Home() {
 
   useEffect(() => {
     Promise.all([jsonFetch('/api/auth/me'), jsonFetch('/api/settings'), jsonFetch('/api/question-types')])
-      .then(([me, settings, typeData]) => { setUser(me.user); setAutoRecord(settings.settings.autoRecord); setAvoidRepeated(Boolean(settings.settings.avoidRepeated)); setQuestionTypes(typeData.types); return loadRecords(); })
+      .then(([me, settings, typeData]) => { setUser(me.user); setAutoRecord(settings.settings.autoRecord); setAvoidRepeated(Boolean(settings.settings.avoidRepeated)); setReadQuestion(Boolean(settings.settings.readQuestion)); setQuestionTypes(typeData.types); return loadRecords(); })
       .catch(() => setUser(null)).finally(() => setLoading(false));
   }, [loadRecords]);
 
@@ -93,6 +123,18 @@ export default function Home() {
   }, [countdown, autoRecord, startRecording]);
 
   useEffect(() => {
+    if (page !== 'answer' || !question || !readQuestion) return;
+    if (!('speechSynthesis' in window)) {
+      setMessage('当前浏览器不支持题目朗读');
+      return;
+    }
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(question.content);
+    utterance.lang = /[\u4e00-\u9fff]/.test(question.content) ? 'zh-CN' : 'en-US';
+    window.speechSynthesis.speak(utterance);
+    return () => window.speechSynthesis.cancel();
+  }, [page, question, readQuestion]);
+  useEffect(() => {
     if (!audioBlob || !question?.hasAnswer) return;
     void jsonFetch('/api/questions/' + question.id + '/answer').then((data) => setReferenceAnswer(data.answer || null)).catch(() => setReferenceAnswer(null));
   }, [audioBlob, question]);
@@ -102,7 +144,7 @@ export default function Home() {
     try {
       const data = await jsonFetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: form.get('username'), password: form.get('password') }) });
       setUser(data.user);
-      const settings = await jsonFetch('/api/settings'); setAutoRecord(settings.settings.autoRecord); setAvoidRepeated(Boolean(settings.settings.avoidRepeated)); const typeData = await jsonFetch('/api/question-types'); setQuestionTypes(typeData.types);
+      const settings = await jsonFetch('/api/settings'); setAutoRecord(settings.settings.autoRecord); setAvoidRepeated(Boolean(settings.settings.avoidRepeated)); setReadQuestion(Boolean(settings.settings.readQuestion)); const typeData = await jsonFetch('/api/question-types'); setQuestionTypes(typeData.types);
       await loadRecords();
     } catch (error) { setMessage((error as Error).message); }
   }
@@ -126,6 +168,7 @@ export default function Home() {
   }
 
   function stopMedia() {
+    window.speechSynthesis?.cancel();
     if (recorder.current?.state === 'recording') recorder.current.stop();
     streamRef.current?.getTracks().forEach((track) => track.stop());
     setRecording(false);
@@ -183,7 +226,7 @@ export default function Home() {
     {page === 'answer' && question && <main className="answer-page"><button className="back" onClick={() => { stopMedia(); setPage('home'); }}>← 返回题库</button><div className="answer-head"><div><small>{question.category}</small><h1>模拟作答</h1></div><button className="again" onClick={() => draw(question.typeId)}>↻ 换一题</button></div><section className="question"><small>INTERVIEW QUESTION</small><b>Q</b><h2>{question.content}</h2>{question.subcategory && <span className="question-subcategory">{question.subcategory}</span>}<p>回答提示：观点明确 · 结构清晰 · 结合具体经历或案例</p>{countdown !== null && <div className="countdown"><div key={countdown}>{countdown}</div><strong>准备开始</strong><small>倒计时结束后{autoRecord ? '将自动录音' : '开始作答'}</small></div>}</section>{referenceAnswer && <section className="reference-answer"><span className="section-kicker">REFERENCE ANSWER</span><h3>参考答案</h3><p>{referenceAnswer}</p></section>}<section className="response"><label>作答提纲 <small>选填</small></label><textarea disabled={countdown !== null} value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="记录你的回答框架、关键词或复盘笔记……" /><div className={`recorder ${recording ? 'on' : ''}`}><span><b>{recording ? '● 正在录音' : audioBlob ? '✓ 录音已完成' : '◉ 录制作答'}</b><small>{recording ? '请保持自然语速' : autoRecord ? '倒计时后自动开始，也可手动控制' : '自动录音已在设置中关闭'}</small></span><button disabled={countdown !== null} onClick={() => recording ? void stopRecording() : void startRecording()}>{recording ? '结束录音' : audioBlob ? '重新录制' : '开始录音'}</button></div></section><div className="actions"><button onClick={() => { stopMedia(); setPage('home'); }}>退出练习</button><button onClick={save} disabled={countdown !== null}>完成并保存记录 →</button></div></main>}
 
     {page === 'history' && <History records={records} cards={homeCards} onFilter={loadRecords} onNew={() => setPage('home')} onContinue={continueFromRecord} />}
-    {page === 'settings' && <Settings autoRecord={autoRecord} avoidRepeated={avoidRepeated} onChange={(value, repeated) => { setAutoRecord(value); setAvoidRepeated(repeated); }} />}
+    {page === 'settings' && <Settings autoRecord={autoRecord} avoidRepeated={avoidRepeated} readQuestion={readQuestion} onChange={(value, repeated, read) => { setAutoRecord(value); setAvoidRepeated(repeated); setReadQuestion(read); }} />}
     {page === 'users' && user.role === 'admin' && <Users />}
     {page === 'question-bank' && user.role === 'admin' && <QuestionBank />}
     <footer><span>小鱼食品保研 · 保研面试训练</span><span>让准备看得见，让表达更从容。</span></footer>
@@ -337,10 +380,26 @@ function History({ records, cards, onFilter, onNew, onContinue }: { records: Rec
       return <article className="record-group" key={group.key}><b>{String((page - 1) * pageSize + index + 1).padStart(2, '0')}</b><div className="record-group-main"><small>{group.username ? '学员：' + group.username + ' · ' : ''}{group.category} · {group.attempts.length} 次作答</small><h3>{group.question}</h3><p className="record-latest">{formatRecordDate(latest.createdAt)} · {latest.hasAudio ? '含录音' : '无录音'} · {latest.referenceAnswer ? '有参考答案' : '暂无参考答案'}</p><div className="record-group-actions"><button className="record-open" onClick={() => setSelectedKey(group.key)}>查看详情 <span>→</span></button>{latest.questionId && latest.typeId && <button className="record-continue" onClick={() => onContinue(latest)}>继续作答</button>}</div></div></article>;
     }) : <div className="empty"><b>复</b><h3>还没有作答记录</h3><p>完成一次练习后，录音、答案和复盘信息会出现在这里。</p></div>}</section>
     <div className="pagination"><button disabled={page <= 1} onClick={() => setPage(page - 1)}>← 上一页</button><span>第 {page} / {totalPages} 页</span><button disabled={page >= totalPages} onClick={() => setPage(page + 1)}>下一页 →</button><form className="page-jump" onSubmit={jump}><input type="number" min="1" max={totalPages} value={jumpPage} onChange={(event) => setJumpPage(event.target.value)} /><button>跳转</button></form></div>
-    {selectedGroup && <div className="modal-backdrop record-detail-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedKey(null); }}><section className="record-detail-modal" role="dialog" aria-modal="true" aria-labelledby="record-detail-title"><button type="button" className="modal-close" aria-label="关闭记录详情" onClick={() => setSelectedKey(null)}>×</button><span className="section-kicker">PRACTICE DETAIL</span><small className="record-detail-meta">{selectedGroup.username ? '学员：' + selectedGroup.username + ' · ' : ''}{selectedGroup.category} · {selectedGroup.attempts.length} 次作答</small><h2 id="record-detail-title">{selectedGroup.question}</h2><div className="record-detail-actions">{selectedGroup.attempts[0].questionId && selectedGroup.attempts[0].typeId && <button className="modal-submit" onClick={() => { onContinue(selectedGroup.attempts[0]); setSelectedKey(null); }}>继续作答</button>}</div><section className="detail-reference">{selectedGroup.attempts[0].referenceAnswer ? <><span className="section-kicker">REFERENCE ANSWER</span><h3>参考答案</h3><p>{selectedGroup.attempts[0].referenceAnswer}</p></> : <><span className="section-kicker">REFERENCE ANSWER</span><h3>暂无参考答案</h3><p>这道题暂时没有配置参考答案。</p></>}</section><div className="detail-attempts"><h3>每次具体作答</h3>{selectedGroup.attempts.map((item, index) => <article className="detail-attempt" key={item.id}><div className="detail-attempt-head"><strong>第 {selectedGroup.attempts.length - index} 次</strong><small>{formatRecordDate(item.createdAt)}</small></div><p className="detail-answer-label">文字作答</p><p className="detail-answer">{item.answer || '本次未填写文字作答。'}</p>{item.hasAudio ? <div className="detail-audio"><audio controls preload="none" src={'/api/records/' + item.id + '/audio'} /><div className="transcript-box">{item.transcriptStatus === 'completed' && item.transcript ? <><span className="transcript-state done">录音文字稿</span><p>{item.transcript}</p></> : item.transcriptStatus === 'processing' ? <><span className="transcript-state pending">正在生成文字稿…</span><p>转写服务正在处理，请稍候，页面会自动刷新。</p></> : item.transcriptStatus === 'failed' ? <><span className="transcript-state failed">生成失败</span><p>{item.transcriptError || '转写失败，请重试。'}</p><button onClick={() => void transcribe(item)}>重新生成文字稿</button></> : <button onClick={() => void transcribe(item)}>生成录音文字稿</button>}</div></div> : <p className="no-audio">这次作答没有录音。</p>}</article>)}</div><section className="ai-placeholder"><span className="section-kicker">AI REVIEW · COMING SOON</span><h3>AI 作答评估区域</h3><p>后续可在这里查看表达结构、专业性、流畅度和改进建议。</p></section></section></div>}
+    {selectedGroup && <div className="modal-backdrop record-detail-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedKey(null); }}><section className="record-detail-modal" role="dialog" aria-modal="true" aria-labelledby="record-detail-title"><button type="button" className="modal-close" aria-label="关闭记录详情" onClick={() => setSelectedKey(null)}>×</button><span className="section-kicker">PRACTICE DETAIL</span><small className="record-detail-meta">{selectedGroup.username ? '学员：' + selectedGroup.username + ' · ' : ''}{selectedGroup.category} · {selectedGroup.attempts.length} 次作答</small><h2 id="record-detail-title">{selectedGroup.question}</h2><div className="record-detail-actions">{selectedGroup.attempts[0].questionId && selectedGroup.attempts[0].typeId && <button className="modal-submit" onClick={() => { onContinue(selectedGroup.attempts[0]); setSelectedKey(null); }}>继续作答</button>}</div><section className="detail-reference">{selectedGroup.attempts[0].referenceAnswer ? <><span className="section-kicker">REFERENCE ANSWER</span><h3>参考答案</h3><p>{selectedGroup.attempts[0].referenceAnswer}</p></> : <><span className="section-kicker">REFERENCE ANSWER</span><h3>暂无参考答案</h3><p>这道题暂时没有配置参考答案。</p></>}</section><div className="detail-attempts"><h3>每次具体作答</h3>{selectedGroup.attempts.map((item, index) => <article className="detail-attempt" key={item.id}><div className="detail-attempt-head"><strong>第 {selectedGroup.attempts.length - index} 次</strong><small>{formatRecordDate(item.createdAt)}</small></div><p className="detail-answer-label">文字作答</p><p className="detail-answer">{item.answer || '本次未填写文字作答。'}</p>{item.hasAudio ? <TranscriptViewer item={item} onTranscribe={() => void transcribe(item)} /> : <p className="no-audio">这次作答没有录音。</p>}</article>)}</div><section className="ai-placeholder"><span className="section-kicker">AI REVIEW · COMING SOON</span><h3>AI 作答评估区域</h3><p>后续可在这里查看表达结构、专业性、流畅度和改进建议。</p></section></section></div>}
   </main>;
 }
-function Settings({ autoRecord, avoidRepeated, onChange }: { autoRecord: boolean; avoidRepeated: boolean; onChange: (value: boolean, avoidRepeated: boolean) => void }) {
+function TranscriptViewer({ item, onTranscribe }: { item: RecordItem; onTranscribe: () => void }) {
+  const [mode, setMode] = useState<'full' | 'segments'>('full');
+  const segments = parseTranscriptSegments(item.transcriptSegments);
+  const canShowSegments = segments.length > 0;
+
+  if (item.transcriptStatus === 'completed' && item.transcript) {
+    return <div className="detail-audio"><audio controls preload="none" src={'/api/records/' + item.id + '/audio'} /><div className="transcript-box"><div className="transcript-toolbar"><span className="transcript-state done">录音文字稿</span>{canShowSegments && <div className="transcript-toggle"><button type="button" className={mode === 'full' ? 'active' : ''} onClick={() => setMode('full')}>完整文字</button><button type="button" className={mode === 'segments' ? 'active' : ''} onClick={() => setMode('segments')}>时间分片</button></div>}</div>{mode === 'segments' && canShowSegments ? <div className="transcript-segments">{segments.map((segment, index) => <p className="transcript-segment" key={segment.startMs + '-' + segment.endMs + '-' + index}><time>{formatTranscriptTime(segment.startMs)} - {formatTranscriptTime(segment.endMs)}</time><span>{segment.text}</span></p>)}</div> : <p>{item.transcript}</p>}</div></div>;
+  }
+  if (item.transcriptStatus === 'processing') {
+    return <div className="detail-audio"><audio controls preload="none" src={'/api/records/' + item.id + '/audio'} /><div className="transcript-box"><span className="transcript-state pending">正在生成文字稿…</span><p>转写服务正在处理，请稍候，页面会自动刷新。</p></div></div>;
+  }
+  if (item.transcriptStatus === 'failed') {
+    return <div className="detail-audio"><audio controls preload="none" src={'/api/records/' + item.id + '/audio'} /><div className="transcript-box"><span className="transcript-state failed">生成失败</span><p>{item.transcriptError || '转写失败，请重试。'}</p><button type="button" onClick={onTranscribe}>重新生成文字稿</button></div></div>;
+  }
+  return <div className="detail-audio"><audio controls preload="none" src={'/api/records/' + item.id + '/audio'} /><div className="transcript-box"><button type="button" onClick={onTranscribe}>生成录音文字稿</button></div></div>;
+}
+function Settings({ autoRecord, avoidRepeated, readQuestion, onChange }: { autoRecord: boolean; avoidRepeated: boolean; readQuestion: boolean; onChange: (value: boolean, avoidRepeated: boolean, readQuestion: boolean) => void }) {
   const [saved, setSaved] = useState('');
   const [guideOpen, setGuideOpen] = useState(false);
   const [origin, setOrigin] = useState('');
@@ -354,7 +413,7 @@ function Settings({ autoRecord, avoidRepeated, onChange }: { autoRecord: boolean
     return () => window.removeEventListener('keydown', closeOnEscape);
   }, [guideOpen]);
 
-  async function update(nextAutoRecord: boolean, nextAvoidRepeated: boolean) { await jsonFetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ autoRecord: nextAutoRecord, avoidRepeated: nextAvoidRepeated }) }); onChange(nextAutoRecord, nextAvoidRepeated); setSaved('设置已保存'); }
+  async function update(nextAutoRecord: boolean, nextAvoidRepeated: boolean, nextReadQuestion: boolean) { await jsonFetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ autoRecord: nextAutoRecord, avoidRepeated: nextAvoidRepeated, readQuestion: nextReadQuestion }) }); onChange(nextAutoRecord, nextAvoidRepeated, nextReadQuestion); setSaved('设置已保存'); }
   async function copyOrigin() {
     if (!origin) return;
     try {
@@ -367,7 +426,7 @@ function Settings({ autoRecord, avoidRepeated, onChange }: { autoRecord: boolean
     setCopied(true); window.setTimeout(() => setCopied(false), 2200);
   }
 
-  return <main className="panel-page"><p className="eyebrow">— PERSONAL SETTINGS</p><h1>系统设置</h1><section className="setting-card"><div><h2>题目显示后自动录音</h2><p>开启后，3 秒准备倒计时结束时自动请求麦克风并开始录制。</p></div><button className={`switch ${autoRecord ? 'on' : ''}`} onClick={() => void update(!autoRecord, avoidRepeated)} aria-label="切换自动录音"><i /></button></section><section className="setting-card"><div><h2>抽题时避开已练习题目</h2><p>开启后，系统会优先抽取你还没有练习过的题目。</p></div><button className={avoidRepeated ? 'switch on' : 'switch'} onClick={() => void update(autoRecord, !avoidRepeated)} aria-label="切换重复题目设置"><i /></button></section>{saved && <p className="saved">✓ {saved}</p>}<section className="permission-card"><div><span className="section-kicker">BROWSER PERMISSION</span><h2>HTTP 环境录音权限</h2><p>当前使用 IP + HTTP 时，浏览器默认不会开放麦克风。打开配置指引，可复制当前网址并快速进入 Chrome / Edge 的安全设置。</p></div><button className="permission-guide-trigger" onClick={() => setGuideOpen(true)}>查看配置指引 <span>→</span></button></section><div className="security-note"><b>数据存储说明</b><p>账号、题库、设置、作答记录和录音都保存在服务器 MySQL 数据库中。</p></div>{guideOpen && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setGuideOpen(false); }}><div className="permission-modal" role="dialog" aria-modal="true" aria-labelledby="permission-guide-title"><button type="button" className="modal-close" aria-label="关闭录音权限指引" onClick={() => setGuideOpen(false)}>×</button><span className="section-kicker">MICROPHONE ACCESS</span><h2 id="permission-guide-title">开启 HTTP 录音权限</h2><p className="permission-intro">网页不能直接修改浏览器实验性开关，但可以帮你准备好要加入白名单的地址。</p><ol className="permission-steps"><li><b>01</b><div><strong>复制当前网址</strong><small>将下面的地址加入浏览器的安全来源列表。</small></div></li><li><b>02</b><div><strong>打开浏览器实验设置</strong><small>Chrome 或 Edge 中搜索 <code>unsafely-treat-insecure-origin-as-secure</code>。</small></div></li><li><b>03</b><div><strong>启用并重启浏览器</strong><small>把地址粘贴到白名单后，将开关设为 Enabled，再重启浏览器。</small></div></li></ol><div className="permission-origin"><code>{origin || '正在读取当前网址…'}</code><button type="button" onClick={() => void copyOrigin()} disabled={!origin}>{copied ? '已复制' : '复制地址'}</button></div><div className="permission-links"><a href="chrome://flags/#unsafely-treat-insecure-origin-as-secure" target="_blank" rel="noreferrer">打开 Chrome 设置</a><a href="edge://flags/#unsafely-treat-insecure-origin-as-secure" target="_blank" rel="noreferrer">打开 Edge 设置</a></div><p className="permission-warning">提示：这是浏览器临时兼容方案，仅建议本机开发使用。正式上线请使用 HTTPS。</p></div></div>}</main>;
+  return <main className="panel-page"><p className="eyebrow">— PERSONAL SETTINGS</p><h1>系统设置</h1><section className="setting-card"><div><h2>题目显示后自动录音</h2><p>开启后，3 秒准备倒计时结束时自动请求麦克风并开始录制。</p></div><button className={`switch ${autoRecord ? 'on' : ''}`} onClick={() => void update(!autoRecord, avoidRepeated, readQuestion)} aria-label="切换自动录音"><i /></button></section><section className="setting-card"><div><h2>抽题时避开已练习题目</h2><p>开启后，系统会优先抽取你还没有练习过的题目。</p></div><button className={avoidRepeated ? 'switch on' : 'switch'} onClick={() => void update(autoRecord, !avoidRepeated, readQuestion)} aria-label="切换重复题目设置"><i /></button></section><section className="setting-card"><div><h2>题目显示后朗读</h2><p>开启后，进入答题页时使用浏览器语音朗读当前题目，支持中文和英文。</p></div><button className={readQuestion ? 'switch on' : 'switch'} onClick={() => void update(autoRecord, avoidRepeated, !readQuestion)} aria-label="切换题目朗读"><i /></button></section>{saved && <p className="saved">✓ {saved}</p>}<section className="permission-card"><div><span className="section-kicker">BROWSER PERMISSION</span><h2>HTTP 环境录音权限</h2><p>当前使用 IP + HTTP 时，浏览器默认不会开放麦克风。打开配置指引，可复制当前网址并快速进入 Chrome / Edge 的安全设置。</p></div><button className="permission-guide-trigger" onClick={() => setGuideOpen(true)}>查看配置指引 <span>→</span></button></section><div className="security-note"><b>数据存储说明</b><p>账号、题库、设置、作答记录和录音都保存在服务器 MySQL 数据库中。</p></div>{guideOpen && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setGuideOpen(false); }}><div className="permission-modal" role="dialog" aria-modal="true" aria-labelledby="permission-guide-title"><button type="button" className="modal-close" aria-label="关闭录音权限指引" onClick={() => setGuideOpen(false)}>×</button><span className="section-kicker">MICROPHONE ACCESS</span><h2 id="permission-guide-title">开启 HTTP 录音权限</h2><p className="permission-intro">网页不能直接修改浏览器实验性开关，但可以帮你准备好要加入白名单的地址。</p><ol className="permission-steps"><li><b>01</b><div><strong>复制当前网址</strong><small>将下面的地址加入浏览器的安全来源列表。</small></div></li><li><b>02</b><div><strong>打开浏览器实验设置</strong><small>Chrome 或 Edge 中搜索 <code>unsafely-treat-insecure-origin-as-secure</code>。</small></div></li><li><b>03</b><div><strong>启用并重启浏览器</strong><small>把地址粘贴到白名单后，将开关设为 Enabled，再重启浏览器。</small></div></li></ol><div className="permission-origin"><code>{origin || '正在读取当前网址…'}</code><button type="button" onClick={() => void copyOrigin()} disabled={!origin}>{copied ? '已复制' : '复制地址'}</button></div><div className="permission-links"><a href="chrome://flags/#unsafely-treat-insecure-origin-as-secure" target="_blank" rel="noreferrer">打开 Chrome 设置</a><a href="edge://flags/#unsafely-treat-insecure-origin-as-secure" target="_blank" rel="noreferrer">打开 Edge 设置</a></div><p className="permission-warning">提示：这是浏览器临时兼容方案，仅建议本机开发使用。正式上线请使用 HTTPS。</p></div></div>}</main>;
 }
 
 function Users() {

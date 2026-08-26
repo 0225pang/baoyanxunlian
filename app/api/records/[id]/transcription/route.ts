@@ -3,6 +3,7 @@ import { execute, query } from '@/lib/db';
 import {
   createAudioToken,
   extractTranscript,
+  extractTranscriptSegments,
   findString,
   getAsrConfig,
 } from '@/lib/asr';
@@ -49,7 +50,7 @@ async function transcribeInBackground(id: number, audioUrl: string) {
       body: JSON.stringify({
         model: config.model,
         input: { file_urls: [audioUrl] },
-        parameters: { channel_id: [0] },
+        parameters: { channel_id: [0], timestamp_alignment_enabled: true },
       }),
     });
     const submitRaw = await submitResponse.text();
@@ -93,12 +94,14 @@ async function transcribeInBackground(id: number, audioUrl: string) {
     if (!resultResponse.ok) {
       throw new Error('百炼 ASR 结果下载失败 ' + resultResponse.status + ': ' + resultRaw.slice(0, 500));
     }
-    const transcript = extractTranscript(readJson(resultRaw));
+    const resultPayload = readJson(resultRaw);
+    const transcript = extractTranscript(resultPayload);
+    const transcriptSegments = extractTranscriptSegments(resultPayload);
     if (!transcript) throw new Error('百炼 ASR 结果中没有文字');
 
     await execute(
-      'UPDATE practice_records SET transcript = ?, transcript_status = \'completed\', transcript_error = NULL, transcribed_at = CURRENT_TIMESTAMP WHERE id = ?',
-      [transcript, id],
+      'UPDATE practice_records SET transcript = ?, transcript_segments = ?, transcript_status = \'completed\', transcript_error = NULL, transcribed_at = CURRENT_TIMESTAMP WHERE id = ?',
+      [transcript, transcriptSegments.length ? JSON.stringify(transcriptSegments) : null, id],
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
