@@ -372,13 +372,25 @@ function QuestionPicker({ types, onBack, onPick }: { types: QuestionType[]; onBa
 
 type SimulationStep = { id: string; title: string; kind: 'intro' | 'question'; typeCode?: string; count?: number; timeSeconds?: number; allowFollowup?: boolean; prompt?: string; questionId?: number; question?: string; category?: string; subcategory?: string | null };
 type SimulationTemplate = { id: number; name: string; description: string; totalSeconds: number; modules: SimulationStep[] | string; followupPrompt?: string; isActive?: boolean };
-type SimulationAnswerDraft = { moduleIndex: number; moduleTitle: string; questionId?: number; question: string; answer: string; transcript: string; elapsedSeconds: number; audio?: Blob; followupQuestion?: string };
+type SimulationAnswerDraft = { moduleIndex: number; moduleTitle: string; questionId?: number; question: string; answer: string; transcript: string; transcriptSegments?: TranscriptSegment[]; elapsedSeconds: number; audio?: Blob; followupQuestion?: string };
 
 function Simulation({ onBack }: { onBack: () => void }) {
-  const [templates, setTemplates] = useState<SimulationTemplate[]>([]); const [templateId, setTemplateId] = useState(''); const [sessionId, setSessionId] = useState(0); const [steps, setSteps] = useState<SimulationStep[]>([]); const [stepIndex, setStepIndex] = useState(0); const [answer, setAnswer] = useState(''); const [recording, setRecording] = useState(false); const [segmentBlob, setSegmentBlob] = useState<Blob | null>(null); const [drafts, setDrafts] = useState<SimulationAnswerDraft[]>([]); const [elapsed, setElapsed] = useState(0); const [stepStartedAt, setStepStartedAt] = useState(0); const [message, setMessage] = useState(''); const [followup, setFollowup] = useState<string | null>(null); const [fullAudio, setFullAudio] = useState<Blob | null>(null); const recorder = useRef<MediaRecorder | null>(null); const chunks = useRef<Blob[]>([]); const stream = useRef<MediaStream | null>(null); const fullRecorder = useRef<MediaRecorder | null>(null); const fullChunks = useRef<Blob[]>([]); const fullAudioRef = useRef<Blob | null>(null); const finishedRef = useRef(false);
+  const [templates, setTemplates] = useState<SimulationTemplate[]>([]); const [templateId, setTemplateId] = useState(''); const [sessionId, setSessionId] = useState(0); const [steps, setSteps] = useState<SimulationStep[]>([]); const [stepIndex, setStepIndex] = useState(0); const [answer, setAnswer] = useState(''); const [recording, setRecording] = useState(false); const [segmentBlob, setSegmentBlob] = useState<Blob | null>(null); const [drafts, setDrafts] = useState<SimulationAnswerDraft[]>([]); const [elapsed, setElapsed] = useState(0); const [stepStartedAt, setStepStartedAt] = useState(0); const [message, setMessage] = useState(''); const [followup, setFollowup] = useState<string | null>(null); const [fullAudio, setFullAudio] = useState<Blob | null>(null); const [autoRecord, setAutoRecord] = useState(true); const [readQuestion, setReadQuestion] = useState(false); const [countdown, setCountdown] = useState<number | null>(null); const [reading, setReading] = useState(false); const recorder = useRef<MediaRecorder | null>(null); const chunks = useRef<Blob[]>([]); const stream = useRef<MediaStream | null>(null); const fullRecorder = useRef<MediaRecorder | null>(null); const fullChunks = useRef<Blob[]>([]); const fullAudioRef = useRef<Blob | null>(null); const finishedRef = useRef(false); const speechRunId = useRef(0); const audioContext = useRef<AudioContext | null>(null); const realtimeSocket = useRef<WebSocket | null>(null); const realtimeContext = useRef<AudioContext | null>(null); const realtimeProcessor = useRef<ScriptProcessorNode | null>(null); const realtimeSource = useRef<MediaStreamAudioSourceNode | null>(null); const segmentTranscriptRef = useRef(''); const segmentTranscriptSegmentsRef = useRef<TranscriptSegment[]>([]);
+  const playCue = useCallback((kind: 'countdown' | 'recording', value = 0) => {
+    try {
+      const AudioContextCtor = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AudioContextCtor) return;
+      audioContext.current ??= new AudioContextCtor(); const context = audioContext.current; void context.resume();
+      const oscillator = context.createOscillator(); const gain = context.createGain(); const start = context.currentTime;
+      const duration = kind === 'recording' ? 0.22 : 0.12; oscillator.type = 'sine'; oscillator.frequency.value = kind === 'recording' ? 880 : 520 + Math.max(0, value) * 70;
+      gain.gain.setValueAtTime(0.0001, start); gain.gain.exponentialRampToValueAtTime(0.08, start + 0.015); gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+      oscillator.connect(gain); gain.connect(context.destination); oscillator.start(start); oscillator.stop(start + duration + 0.02);
+    } catch { /* Web Audio may wait for a user gesture. */ }
+  }, []);
   useEffect(() => { jsonFetch('/api/simulations').then((data) => { setTemplates(data.templates || []); if (data.templates?.[0]) setTemplateId(String(data.templates[0].id)); }).catch((error) => setMessage((error as Error).message)); }, []);
+  useEffect(() => { jsonFetch('/api/settings').then((data) => { setAutoRecord(Boolean(data.settings?.autoRecord)); setReadQuestion(Boolean(data.settings?.readQuestion)); }).catch(() => undefined); }, []);
   useEffect(() => { if (!sessionId) return; const timer = window.setInterval(() => setElapsed((value) => value + 1), 1000); return () => window.clearInterval(timer); }, [sessionId]);
-  useEffect(() => () => { if (recorder.current?.state === 'recording') recorder.current.stop(); if (fullRecorder.current?.state === 'recording') fullRecorder.current.stop(); stream.current?.getTracks().forEach((track) => track.stop()); }, []);
+  useEffect(() => () => { speechRunId.current += 1; window.speechSynthesis?.cancel(); stopRealtime(); if (recorder.current?.state === 'recording') recorder.current.stop(); if (fullRecorder.current?.state === 'recording') fullRecorder.current.stop(); stream.current?.getTracks().forEach((track) => track.stop()); }, []);
   const current = steps[stepIndex]; const totalSeconds = templates.find((item) => item.id === Number(templateId))?.totalSeconds || 0; const stepElapsed = stepStartedAt ? Math.max(0, Math.floor((Date.now() - stepStartedAt) / 1000)) : 0;
   const format = (seconds: number) => String(Math.floor(Math.max(0, seconds) / 60)).padStart(2, '0') + ':' + String(Math.max(0, seconds) % 60).padStart(2, '0');
   useEffect(() => {
@@ -399,8 +411,58 @@ function Simulation({ onBack }: { onBack: () => void }) {
       fullRecorder.current = value; value.start(1000);
     } catch { setMessage('完整录音未开启：请允许浏览器使用麦克风。仍可继续用文字完成模拟。'); }
   }
-  async function start() { try { const data = await jsonFetch('/api/simulations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ templateId: Number(templateId) }) }); setSessionId(data.sessionId); setSteps(data.steps); setStepIndex(0); setStepStartedAt(Date.now()); setElapsed(0); setDrafts([]); setAnswer(''); setFollowup(null); setSegmentBlob(null); setFullAudio(null); fullAudioRef.current = null; finishedRef.current = false; await startFullRecording(); } catch (error) { setMessage((error as Error).message); } }
+  function stopRealtime() {
+    try { if (realtimeSocket.current?.readyState === WebSocket.OPEN) realtimeSocket.current.send(JSON.stringify({ action: 'finish' })); } catch { /* ignore */ }
+    realtimeProcessor.current?.disconnect(); realtimeSource.current?.disconnect(); realtimeProcessor.current = null; realtimeSource.current = null;
+    if (realtimeContext.current) { void realtimeContext.current.close(); realtimeContext.current = null; }
+    if (realtimeSocket.current && realtimeSocket.current.readyState < WebSocket.CLOSING) realtimeSocket.current.close(); realtimeSocket.current = null;
+  }
+  async function startRealtime() {
+    const media = stream.current; if (!media || typeof WebSocket === 'undefined') return;
+    stopRealtime();
+    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'; const socket = new WebSocket(`${protocol}://${window.location.host}/ws/realtime-asr`); socket.binaryType = 'arraybuffer'; realtimeSocket.current = socket;
+    socket.onmessage = async (event) => {
+      try {
+        const raw = typeof event.data === 'string' ? event.data : event.data instanceof Blob ? await event.data.text() : new TextDecoder().decode(event.data);
+        const payload = JSON.parse(raw); const sentence = payload?.payload?.output?.sentence; if (sentence?.text) { segmentTranscriptRef.current = (segmentTranscriptRef.current ? segmentTranscriptRef.current + ' ' : '') + String(sentence.text); segmentTranscriptSegmentsRef.current.push({ startMs: Number(sentence.begin_time) || 0, endMs: Number(sentence.end_time) || 0, text: String(sentence.text) }); setAnswer(segmentTranscriptRef.current); }
+        if (payload?.type === 'error') setMessage(payload.message || '实时语音识别连接失败');
+      } catch { /* ignore non-JSON upstream frames */ }
+    };
+    socket.onerror = () => setMessage('实时语音识别连接失败，本场仍会保存录音。');
+    socket.onopen = () => {
+      socket.send(JSON.stringify({ action: 'start', taskId: crypto.randomUUID(), sampleRate: 16000 }));
+      const context = new AudioContext(); realtimeContext.current = context; const source = context.createMediaStreamSource(media); const processor = context.createScriptProcessor(4096, 1, 1); const mute = context.createGain(); mute.gain.value = 0;
+      processor.onaudioprocess = (event) => { if (socket.readyState !== WebSocket.OPEN) return; const input = event.inputBuffer.getChannelData(0); const ratio = context.sampleRate / 16000; const length = Math.floor(input.length / ratio); const pcm = new Int16Array(length); for (let i = 0; i < length; i += 1) { const sample = Math.max(-1, Math.min(1, input[Math.floor(i * ratio)])); pcm[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff; } socket.send(pcm.buffer); };
+      source.connect(processor); processor.connect(mute); mute.connect(context.destination); realtimeSource.current = source; realtimeProcessor.current = processor; void context.resume();
+    };
+  }
+  async function start() { try { const data = await jsonFetch('/api/simulations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ templateId: Number(templateId) }) }); setSessionId(data.sessionId); setSteps(data.steps); setStepIndex(0); setStepStartedAt(Date.now()); setElapsed(0); setDrafts([]); setAnswer(''); setFollowup(null); setSegmentBlob(null); setFullAudio(null); fullAudioRef.current = null; finishedRef.current = false; segmentTranscriptRef.current = ''; setReading(false); setCountdown(3); await startFullRecording(); void startRealtime(); } catch (error) { setMessage((error as Error).message); } }
   async function startRecording() { try { const media = stream.current || await navigator.mediaDevices.getUserMedia({ audio: true }); stream.current = media; chunks.current = []; const value = new MediaRecorder(media); value.ondataavailable = (event) => { if (event.data.size) chunks.current.push(event.data); }; value.onstop = () => { const blob = new Blob(chunks.current, { type: value.mimeType || 'audio/webm' }); setSegmentBlob(blob); setRecording(false); }; recorder.current = value; value.start(); setRecording(true); } catch { setMessage('无法使用麦克风，请先允许浏览器录音权限。'); } }
+  const startRecordingWithCue = useCallback(async () => { playCue('recording'); await startRecording(); }, [playCue]);
+  const countdownStepRef = useRef(-1);
+  useEffect(() => {
+    if (!sessionId || stepIndex === countdownStepRef.current) return;
+    countdownStepRef.current = stepIndex;
+    segmentTranscriptRef.current = ''; segmentTranscriptSegmentsRef.current = [];
+    if (stepStartedAt) { setReading(false); setCountdown(3); }
+  }, [sessionId, stepIndex, stepStartedAt]);
+  useEffect(() => {
+    if (!sessionId || countdown === null) return;
+    playCue('countdown', countdown);
+    setMessage(`准备开始 · ${countdown}`);
+    const timer = window.setTimeout(() => {
+      if (countdown > 1) { setCountdown(countdown - 1); return; }
+      setCountdown(null); setMessage('');
+      const text = current?.question || current?.prompt || '';
+      if (readQuestion && text && 'speechSynthesis' in window) {
+        const runId = ++speechRunId.current; let completed = false; setReading(true); window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(text); utterance.lang = /[\u4e00-\u9fff]/.test(text) ? 'zh-CN' : 'en-US';
+        const finishReading = () => { if (completed || speechRunId.current !== runId) return; completed = true; setReading(false); if (autoRecord) void startRecordingWithCue(); };
+        utterance.onend = finishReading; utterance.onerror = finishReading; window.speechSynthesis.speak(utterance);
+      } else { setReading(false); if (autoRecord) void startRecordingWithCue(); }
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [sessionId, countdown, current, readQuestion, autoRecord, playCue, startRecordingWithCue]);
   function stopRecording() { if (recorder.current?.state === 'recording') recorder.current.stop(); }
   async function stopFullRecording() { const value = fullRecorder.current; if (!value || value.state !== 'recording') return fullAudioRef.current; return new Promise<Blob | null>((resolve) => { value.addEventListener('stop', () => resolve(fullAudioRef.current), { once: true }); value.stop(); }); }
   async function generateFollowup(sourceAnswer = answer, primaryAlreadySaved = false) { if (!current || !sourceAnswer.trim()) return; if (!primaryAlreadySaved) { saveCurrent(current.title, current.question || current.prompt || ''); } try { const data = await jsonFetch('/api/simulations/' + sessionId + '/followup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question: current.question || current.prompt, answer: sourceAnswer, moduleTitle: current.title }) }); setFollowup(data.followup); } catch (error) { setMessage((error as Error).message); } }
