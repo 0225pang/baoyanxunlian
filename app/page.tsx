@@ -81,6 +81,7 @@ export default function Home() {
   const chunks = useRef<Blob[]>([]);
   const stopResolver = useRef<((blob: Blob | null) => void) | null>(null);
   const recordingStartedAt = useRef<number | null>(null);
+  const speechRunId = useRef(0);
 
   const startRecording = useCallback(async () => {
     if (recorder.current?.state === 'recording') return;
@@ -116,24 +117,30 @@ export default function Home() {
     const timer = window.setTimeout(() => {
       if (countdown === 1) {
         setCountdown(null);
-        if (autoRecord) void startRecording();
+        if (readQuestion && question) {
+          const runId = ++speechRunId.current;
+          if (!('speechSynthesis' in window)) {
+            setMessage('当前浏览器不支持题目朗读');
+            if (autoRecord) void startRecording();
+            return;
+          }
+          window.speechSynthesis.cancel();
+          const utterance = new SpeechSynthesisUtterance(question.content);
+          utterance.lang = /[\u4e00-\u9fff]/.test(question.content) ? 'zh-CN' : 'en-US';
+          let completed = false;
+          const finishReading = () => {
+            if (completed || speechRunId.current !== runId) return;
+            completed = true;
+            if (autoRecord) void startRecording();
+          };
+          utterance.onend = finishReading;
+          utterance.onerror = finishReading;
+          window.speechSynthesis.speak(utterance);
+        } else if (autoRecord) void startRecording();
       } else setCountdown(countdown - 1);
     }, 1000);
     return () => window.clearTimeout(timer);
-  }, [countdown, autoRecord, startRecording]);
-
-  useEffect(() => {
-    if (page !== 'answer' || !question || !readQuestion) return;
-    if (!('speechSynthesis' in window)) {
-      setMessage('当前浏览器不支持题目朗读');
-      return;
-    }
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(question.content);
-    utterance.lang = /[\u4e00-\u9fff]/.test(question.content) ? 'zh-CN' : 'en-US';
-    window.speechSynthesis.speak(utterance);
-    return () => window.speechSynthesis.cancel();
-  }, [page, question, readQuestion]);
+  }, [countdown, autoRecord, question, readQuestion, startRecording]);
   useEffect(() => {
     if (!audioBlob || !question?.hasAnswer) return;
     void jsonFetch('/api/questions/' + question.id + '/answer').then((data) => setReferenceAnswer(data.answer || null)).catch(() => setReferenceAnswer(null));
@@ -168,6 +175,7 @@ export default function Home() {
   }
 
   function stopMedia() {
+    speechRunId.current += 1;
     window.speechSynthesis?.cancel();
     if (recorder.current?.state === 'recording') recorder.current.stop();
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -223,7 +231,7 @@ export default function Home() {
       <section className="steps"><div><small>HOW IT WORKS</small><h2>四步完成一次高效练习</h2></div><ol><li><b>01</b>选择类别</li><li><b>02</b>3 秒准备</li><li><b>03</b>自动录音</li><li><b>04</b>复盘提升</li></ol></section>
     </main>}
 
-    {page === 'answer' && question && <main className="answer-page"><button className="back" onClick={() => { stopMedia(); setPage('home'); }}>← 返回题库</button><div className="answer-head"><div><small>{question.category}</small><h1>模拟作答</h1></div><button className="again" onClick={() => draw(question.typeId)}>↻ 换一题</button></div><section className="question"><small>INTERVIEW QUESTION</small><b>Q</b><h2>{question.content}</h2>{question.subcategory && <span className="question-subcategory">{question.subcategory}</span>}<p>回答提示：观点明确 · 结构清晰 · 结合具体经历或案例</p>{countdown !== null && <div className="countdown"><div key={countdown}>{countdown}</div><strong>准备开始</strong><small>倒计时结束后{autoRecord ? '将自动录音' : '开始作答'}</small></div>}</section>{referenceAnswer && <section className="reference-answer"><span className="section-kicker">REFERENCE ANSWER</span><h3>参考答案</h3><p>{referenceAnswer}</p></section>}<section className="response"><label>作答提纲 <small>选填</small></label><textarea disabled={countdown !== null} value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="记录你的回答框架、关键词或复盘笔记……" /><div className={`recorder ${recording ? 'on' : ''}`}><span><b>{recording ? '● 正在录音' : audioBlob ? '✓ 录音已完成' : '◉ 录制作答'}</b><small>{recording ? '请保持自然语速' : autoRecord ? '倒计时后自动开始，也可手动控制' : '自动录音已在设置中关闭'}</small></span><button disabled={countdown !== null} onClick={() => recording ? void stopRecording() : void startRecording()}>{recording ? '结束录音' : audioBlob ? '重新录制' : '开始录音'}</button></div></section><div className="actions"><button onClick={() => { stopMedia(); setPage('home'); }}>退出练习</button><button onClick={save} disabled={countdown !== null}>完成并保存记录 →</button></div></main>}
+    {page === 'answer' && question && <main className="answer-page"><button className="back" onClick={() => { stopMedia(); setPage('home'); }}>← 返回题库</button><div className="answer-head"><div><small>{question.category}</small><h1>模拟作答</h1></div><button className="again" onClick={() => draw(question.typeId)}>↻ 换一题</button></div><section className="question"><small>INTERVIEW QUESTION</small><b>Q</b><h2>{question.content}</h2>{question.subcategory && <span className="question-subcategory">{question.subcategory}</span>}<p>回答提示：观点明确 · 结构清晰 · 结合具体经历或案例</p>{countdown !== null && <div className="countdown"><div key={countdown}>{countdown}</div><strong>准备开始</strong><small>{readQuestion ? (autoRecord ? '朗读题目，朗读结束后自动录音' : '朗读题目后开始作答') : (autoRecord ? '倒计时结束后将自动录音' : '倒计时结束后开始作答')}</small></div>}</section>{referenceAnswer && <section className="reference-answer"><span className="section-kicker">REFERENCE ANSWER</span><h3>参考答案</h3><p>{referenceAnswer}</p></section>}<section className="response"><label>作答提纲 <small>选填</small></label><textarea disabled={countdown !== null} value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="记录你的回答框架、关键词或复盘笔记……" /><div className={`recorder ${recording ? 'on' : ''}`}><span><b>{recording ? '● 正在录音' : audioBlob ? '✓ 录音已完成' : '◉ 录制作答'}</b><small>{recording ? '请保持自然语速' : autoRecord ? '倒计时后自动开始，也可手动控制' : '自动录音已在设置中关闭'}</small></span><button disabled={countdown !== null} onClick={() => recording ? void stopRecording() : void startRecording()}>{recording ? '结束录音' : audioBlob ? '重新录制' : '开始录音'}</button></div></section><div className="actions"><button onClick={() => { stopMedia(); setPage('home'); }}>退出练习</button><button onClick={save} disabled={countdown !== null}>完成并保存记录 →</button></div></main>}
 
     {page === 'history' && <History records={records} cards={homeCards} onFilter={loadRecords} onNew={() => setPage('home')} onContinue={continueFromRecord} />}
     {page === 'settings' && <Settings autoRecord={autoRecord} avoidRepeated={avoidRepeated} readQuestion={readQuestion} onChange={(value, repeated, read) => { setAutoRecord(value); setAvoidRepeated(repeated); setReadQuestion(read); }} />}
@@ -426,7 +434,7 @@ function Settings({ autoRecord, avoidRepeated, readQuestion, onChange }: { autoR
     setCopied(true); window.setTimeout(() => setCopied(false), 2200);
   }
 
-  return <main className="panel-page"><p className="eyebrow">— PERSONAL SETTINGS</p><h1>系统设置</h1><section className="setting-card"><div><h2>题目显示后自动录音</h2><p>开启后，3 秒准备倒计时结束时自动请求麦克风并开始录制。</p></div><button className={`switch ${autoRecord ? 'on' : ''}`} onClick={() => void update(!autoRecord, avoidRepeated, readQuestion)} aria-label="切换自动录音"><i /></button></section><section className="setting-card"><div><h2>抽题时避开已练习题目</h2><p>开启后，系统会优先抽取你还没有练习过的题目。</p></div><button className={avoidRepeated ? 'switch on' : 'switch'} onClick={() => void update(autoRecord, !avoidRepeated, readQuestion)} aria-label="切换重复题目设置"><i /></button></section><section className="setting-card"><div><h2>题目显示后朗读</h2><p>开启后，进入答题页时使用浏览器语音朗读当前题目，支持中文和英文。</p></div><button className={readQuestion ? 'switch on' : 'switch'} onClick={() => void update(autoRecord, avoidRepeated, !readQuestion)} aria-label="切换题目朗读"><i /></button></section>{saved && <p className="saved">✓ {saved}</p>}<section className="permission-card"><div><span className="section-kicker">BROWSER PERMISSION</span><h2>HTTP 环境录音权限</h2><p>当前使用 IP + HTTP 时，浏览器默认不会开放麦克风。打开配置指引，可复制当前网址并快速进入 Chrome / Edge 的安全设置。</p></div><button className="permission-guide-trigger" onClick={() => setGuideOpen(true)}>查看配置指引 <span>→</span></button></section><div className="security-note"><b>数据存储说明</b><p>账号、题库、设置、作答记录和录音都保存在服务器 MySQL 数据库中。</p></div>{guideOpen && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setGuideOpen(false); }}><div className="permission-modal" role="dialog" aria-modal="true" aria-labelledby="permission-guide-title"><button type="button" className="modal-close" aria-label="关闭录音权限指引" onClick={() => setGuideOpen(false)}>×</button><span className="section-kicker">MICROPHONE ACCESS</span><h2 id="permission-guide-title">开启 HTTP 录音权限</h2><p className="permission-intro">网页不能直接修改浏览器实验性开关，但可以帮你准备好要加入白名单的地址。</p><ol className="permission-steps"><li><b>01</b><div><strong>复制当前网址</strong><small>将下面的地址加入浏览器的安全来源列表。</small></div></li><li><b>02</b><div><strong>打开浏览器实验设置</strong><small>Chrome 或 Edge 中搜索 <code>unsafely-treat-insecure-origin-as-secure</code>。</small></div></li><li><b>03</b><div><strong>启用并重启浏览器</strong><small>把地址粘贴到白名单后，将开关设为 Enabled，再重启浏览器。</small></div></li></ol><div className="permission-origin"><code>{origin || '正在读取当前网址…'}</code><button type="button" onClick={() => void copyOrigin()} disabled={!origin}>{copied ? '已复制' : '复制地址'}</button></div><div className="permission-links"><a href="chrome://flags/#unsafely-treat-insecure-origin-as-secure" target="_blank" rel="noreferrer">打开 Chrome 设置</a><a href="edge://flags/#unsafely-treat-insecure-origin-as-secure" target="_blank" rel="noreferrer">打开 Edge 设置</a></div><p className="permission-warning">提示：这是浏览器临时兼容方案，仅建议本机开发使用。正式上线请使用 HTTPS。</p></div></div>}</main>;
+  return <main className="panel-page"><p className="eyebrow">— PERSONAL SETTINGS</p><h1>系统设置</h1><section className="setting-card"><div><h2>题目显示后自动录音</h2><p>开启后，3 秒准备倒计时结束时自动请求麦克风并开始录制。</p></div><button className={`switch ${autoRecord ? 'on' : ''}`} onClick={() => void update(!autoRecord, avoidRepeated, readQuestion)} aria-label="切换自动录音"><i /></button></section><section className="setting-card"><div><h2>抽题时避开已练习题目</h2><p>开启后，系统会优先抽取你还没有练习过的题目。</p></div><button className={avoidRepeated ? 'switch on' : 'switch'} onClick={() => void update(autoRecord, !avoidRepeated, readQuestion)} aria-label="切换重复题目设置"><i /></button></section><section className="setting-card"><div><h2>题目显示后朗读</h2><p>开启后，3 秒倒计时结束时使用浏览器语音朗读当前题目，朗读结束后再开始自动录音，支持中文和英文。</p></div><button className={readQuestion ? 'switch on' : 'switch'} onClick={() => void update(autoRecord, avoidRepeated, !readQuestion)} aria-label="切换题目朗读"><i /></button></section>{saved && <p className="saved">✓ {saved}</p>}<section className="permission-card"><div><span className="section-kicker">BROWSER PERMISSION</span><h2>HTTP 环境录音权限</h2><p>当前使用 IP + HTTP 时，浏览器默认不会开放麦克风。打开配置指引，可复制当前网址并快速进入 Chrome / Edge 的安全设置。</p></div><button className="permission-guide-trigger" onClick={() => setGuideOpen(true)}>查看配置指引 <span>→</span></button></section><div className="security-note"><b>数据存储说明</b><p>账号、题库、设置、作答记录和录音都保存在服务器 MySQL 数据库中。</p></div>{guideOpen && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setGuideOpen(false); }}><div className="permission-modal" role="dialog" aria-modal="true" aria-labelledby="permission-guide-title"><button type="button" className="modal-close" aria-label="关闭录音权限指引" onClick={() => setGuideOpen(false)}>×</button><span className="section-kicker">MICROPHONE ACCESS</span><h2 id="permission-guide-title">开启 HTTP 录音权限</h2><p className="permission-intro">网页不能直接修改浏览器实验性开关，但可以帮你准备好要加入白名单的地址。</p><ol className="permission-steps"><li><b>01</b><div><strong>复制当前网址</strong><small>将下面的地址加入浏览器的安全来源列表。</small></div></li><li><b>02</b><div><strong>打开浏览器实验设置</strong><small>Chrome 或 Edge 中搜索 <code>unsafely-treat-insecure-origin-as-secure</code>。</small></div></li><li><b>03</b><div><strong>启用并重启浏览器</strong><small>把地址粘贴到白名单后，将开关设为 Enabled，再重启浏览器。</small></div></li></ol><div className="permission-origin"><code>{origin || '正在读取当前网址…'}</code><button type="button" onClick={() => void copyOrigin()} disabled={!origin}>{copied ? '已复制' : '复制地址'}</button></div><div className="permission-links"><a href="chrome://flags/#unsafely-treat-insecure-origin-as-secure" target="_blank" rel="noreferrer">打开 Chrome 设置</a><a href="edge://flags/#unsafely-treat-insecure-origin-as-secure" target="_blank" rel="noreferrer">打开 Edge 设置</a></div><p className="permission-warning">提示：这是浏览器临时兼容方案，仅建议本机开发使用。正式上线请使用 HTTPS。</p></div></div>}</main>;
 }
 
 function Users() {
