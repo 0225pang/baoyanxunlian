@@ -13,7 +13,7 @@ type BankQuestion = { id: number; typeId: number; typeName: string; content: str
 type TranscriptSegment = { startMs: number; endMs: number; text: string };
 type RecordItem = { id: number; userId: number; questionId: number | null; typeId?: number | null; category: Category; question: string; answer: string; subcategory?: string | null; referenceAnswer?: string | null; hasReferenceAnswer?: number; hasAudio: number; transcript?: string | null; transcriptSegments?: TranscriptSegment[] | string | null; transcriptStatus?: string; transcriptError?: string | null; transcribedAt?: string | null; createdAt: string; username?: string; displayName?: string };
 type RecordGroup = { key: string; userId: number; questionId: number | null; category: Category; question: string; username?: string; attempts: RecordItem[] };
-type Page = 'home' | 'answer' | 'history' | 'settings' | 'users' | 'question-bank';
+type Page = 'home' | 'answer' | 'history' | 'settings' | 'management' | 'review';
 
 type HomeCard = QuestionType & { no: string; en: string; desc: string; icon: string; color: string };
 const cardColors = ['coral', 'blue', 'green'];
@@ -64,6 +64,7 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState<Page>('home');
   const [question, setQuestion] = useState<Question | null>(null);
+  const [reviewGroup, setReviewGroup] = useState<RecordGroup | null>(null);
   const [questionTypes, setQuestionTypes] = useState<QuestionType[]>([]);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [answer, setAnswer] = useState('');
@@ -82,6 +83,30 @@ export default function Home() {
   const stopResolver = useRef<((blob: Blob | null) => void) | null>(null);
   const recordingStartedAt = useRef<number | null>(null);
   const speechRunId = useRef(0);
+  const audioContext = useRef<AudioContext | null>(null);
+
+  const playCue = useCallback((kind: 'countdown' | 'recording', value = 0) => {
+    try {
+      const AudioContextCtor = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AudioContextCtor) return;
+      audioContext.current ??= new AudioContextCtor();
+      const context = audioContext.current;
+      void context.resume();
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      const start = context.currentTime;
+      const duration = kind === 'recording' ? 0.22 : 0.12;
+      oscillator.type = 'sine';
+      oscillator.frequency.value = kind === 'recording' ? 880 : 520 + Math.max(0, value) * 70;
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(0.08, start + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+      oscillator.connect(gain); gain.connect(context.destination);
+      oscillator.start(start); oscillator.stop(start + duration + 0.02);
+    } catch {
+      // The browser may block Web Audio until the first user gesture.
+    }
+  }, []);
 
   const startRecording = useCallback(async () => {
     if (recorder.current?.state === 'recording') return;
@@ -97,9 +122,9 @@ export default function Home() {
         setAudioBlob(blob); setRecording(false); stream.getTracks().forEach((track) => track.stop());
         stopResolver.current?.(blob); stopResolver.current = null;
       };
-      recordingStartedAt.current = Date.now(); mediaRecorder.start(); recorder.current = mediaRecorder; setRecording(true);
+      recordingStartedAt.current = Date.now(); mediaRecorder.start(); recorder.current = mediaRecorder; setRecording(true); playCue('recording');
     } catch { setMessage('无法使用麦克风，请在浏览器地址栏允许录音权限。'); }
-  }, []);
+  }, [playCue]);
 
   const loadRecords = useCallback(async (category = '', search = '') => {
     const data = await jsonFetch(`/api/records?category=${encodeURIComponent(category)}&q=${encodeURIComponent(search)}`);
@@ -114,6 +139,7 @@ export default function Home() {
 
   useEffect(() => {
     if (countdown === null) return;
+    playCue('countdown', countdown);
     const timer = window.setTimeout(() => {
       if (countdown === 1) {
         setCountdown(null);
@@ -140,7 +166,7 @@ export default function Home() {
       } else setCountdown(countdown - 1);
     }, 1000);
     return () => window.clearTimeout(timer);
-  }, [countdown, autoRecord, question, readQuestion, startRecording]);
+  }, [countdown, autoRecord, question, readQuestion, startRecording, playCue]);
   useEffect(() => {
     if (!audioBlob || !question?.hasAnswer) return;
     void jsonFetch('/api/questions/' + question.id + '/answer').then((data) => setReferenceAnswer(data.answer || null)).catch(() => setReferenceAnswer(null));
@@ -219,7 +245,7 @@ export default function Home() {
         <button className={page === 'home' || page === 'answer' ? 'active' : ''} onClick={() => setPage('home')}>题库训练</button>
         <button className={page === 'history' ? 'active' : ''} onClick={() => setPage('history')}>作答记录 <i>{records.length}</i></button>
         <button className={page === 'settings' ? 'active' : ''} onClick={() => setPage('settings')}>设置</button>
-        {user.role === 'admin' && <><button className={page === 'users' ? 'active' : ''} onClick={() => setPage('users')}>用户管理</button><button className={page === 'question-bank' ? 'active' : ''} onClick={() => setPage('question-bank')}>题库管理</button></>}
+        {user.role === 'admin' && <button className={page === 'management' ? 'active' : ''} onClick={() => setPage('management')}>管理后台</button>}
       </nav>
       <button className="user-chip" onClick={logout}>{user.displayName}<small>退出</small></button>
     </header>
@@ -233,10 +259,10 @@ export default function Home() {
 
     {page === 'answer' && question && <main className="answer-page"><button className="back" onClick={() => { stopMedia(); setPage('home'); }}>← 返回题库</button><div className="answer-head"><div><small>{question.category}</small><h1>模拟作答</h1></div><button className="again" onClick={() => draw(question.typeId)}>↻ 换一题</button></div><section className="question"><small>INTERVIEW QUESTION</small><b>Q</b><h2>{question.content}</h2>{question.subcategory && <span className="question-subcategory">{question.subcategory}</span>}<p>回答提示：观点明确 · 结构清晰 · 结合具体经历或案例</p>{countdown !== null && <div className="countdown"><div key={countdown}>{countdown}</div><strong>准备开始</strong><small>{readQuestion ? (autoRecord ? '朗读题目，朗读结束后自动录音' : '朗读题目后开始作答') : (autoRecord ? '倒计时结束后将自动录音' : '倒计时结束后开始作答')}</small></div>}</section>{referenceAnswer && <section className="reference-answer"><span className="section-kicker">REFERENCE ANSWER</span><h3>参考答案</h3><p>{referenceAnswer}</p></section>}<section className="response"><label>作答提纲 <small>选填</small></label><textarea disabled={countdown !== null} value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="记录你的回答框架、关键词或复盘笔记……" /><div className={`recorder ${recording ? 'on' : ''}`}><span><b>{recording ? '● 正在录音' : audioBlob ? '✓ 录音已完成' : '◉ 录制作答'}</b><small>{recording ? '请保持自然语速' : autoRecord ? '倒计时后自动开始，也可手动控制' : '自动录音已在设置中关闭'}</small></span><button disabled={countdown !== null} onClick={() => recording ? void stopRecording() : void startRecording()}>{recording ? '结束录音' : audioBlob ? '重新录制' : '开始录音'}</button></div></section><div className="actions"><button onClick={() => { stopMedia(); setPage('home'); }}>退出练习</button><button onClick={save} disabled={countdown !== null}>完成并保存记录 →</button></div></main>}
 
-    {page === 'history' && <History records={records} cards={homeCards} onFilter={loadRecords} onNew={() => setPage('home')} onContinue={continueFromRecord} />}
+    {page === 'history' && <History records={records} cards={homeCards} onFilter={loadRecords} onNew={() => setPage('home')} onContinue={continueFromRecord} onReview={(group) => { setReviewGroup(group); setPage('review'); }} />}
     {page === 'settings' && <Settings autoRecord={autoRecord} avoidRepeated={avoidRepeated} readQuestion={readQuestion} onChange={(value, repeated, read) => { setAutoRecord(value); setAvoidRepeated(repeated); setReadQuestion(read); }} />}
-    {page === 'users' && user.role === 'admin' && <Users />}
-    {page === 'question-bank' && user.role === 'admin' && <QuestionBank />}
+    {page === 'review' && reviewGroup && <ReviewPage group={reviewGroup} onBack={() => { setPage('history'); void loadRecords(); }} />}
+    {page === 'management' && user.role === 'admin' && <Management />}
     <footer><span>小鱼食品保研 · 保研面试训练</span><span>让准备看得见，让表达更从容。</span></footer>
   </div>;
 }
@@ -333,7 +359,7 @@ function Login({ onSubmit, message }: { onSubmit: (event: FormEvent<HTMLFormElem
   return <div className="login-shell"><form className="login-card" onSubmit={registering ? register : onSubmit}><b className="login-mark">研</b><small>YANLU INTERVIEW TRAINER</small><h1>{registering ? '申请注册' : '欢迎回来'}</h1><p>{registering ? '提交后需管理员审核通过才能登录' : '登录后开始你的保研面试训练'}</p>{registering && <label>姓名<input name="displayName" autoComplete="name" required /></label>}<label>账号<input name="username" autoComplete="username" required /></label><label>密码<input name="password" type="password" minLength={registering ? 8 : undefined} autoComplete={registering ? 'new-password' : 'current-password'} required /></label>{(registering ? registerMessage : message) && <div className={registerMessage.includes('已提交') ? 'form-success' : 'form-error'}>{registering ? registerMessage : message}</div>}<button type="submit">{registering ? '提交注册申请 →' : '登录系统 →'}</button><button type="button" className="login-switch" onClick={() => { setRegistering(!registering); setRegisterMessage(''); }}>{registering ? '已有账号？返回登录' : '没有账号？申请注册'}</button></form></div>;
 }
 
-function History({ records, cards, onFilter, onNew, onContinue }: { records: RecordItem[]; cards: HomeCard[]; onFilter: (category?: string, search?: string) => Promise<void>; onNew: () => void; onContinue: (item: RecordItem) => void }) {
+function History({ records, cards, onFilter, onNew, onContinue, onReview }: { records: RecordItem[]; cards: HomeCard[]; onFilter: (category?: string, search?: string) => Promise<void>; onNew: () => void; onContinue: (item: RecordItem) => void; onReview: (group: RecordGroup) => void }) {
   const [category, setCategory] = useState('');
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
@@ -385,10 +411,10 @@ function History({ records, cards, onFilter, onNew, onContinue }: { records: Rec
     {message && <div className="management-message">{message}</div>}
     <section className="records">{visibleGroups.length ? visibleGroups.map((group, index) => {
       const latest = group.attempts[0];
-      return <article className="record-group" key={group.key}><b>{String((page - 1) * pageSize + index + 1).padStart(2, '0')}</b><div className="record-group-main"><small>{group.username ? '学员：' + group.username + ' · ' : ''}{group.category} · {group.attempts.length} 次作答</small><h3>{group.question}</h3><p className="record-latest">{formatRecordDate(latest.createdAt)} · {latest.hasAudio ? '含录音' : '无录音'} · {latest.referenceAnswer ? '有参考答案' : '暂无参考答案'}</p><div className="record-group-actions"><button className="record-open" onClick={() => setSelectedKey(group.key)}>查看详情 <span>→</span></button>{latest.questionId && latest.typeId && <button className="record-continue" onClick={() => onContinue(latest)}>继续作答</button>}</div></div></article>;
+      return <article className="record-group" key={group.key}><b>{String((page - 1) * pageSize + index + 1).padStart(2, '0')}</b><div className="record-group-main"><small>{group.username ? '学员：' + group.username + ' · ' : ''}{group.category} · {group.attempts.length} 次作答</small><h3>{group.question}</h3><p className="record-latest">{formatRecordDate(latest.createdAt)} · {latest.hasAudio ? '含录音' : '无录音'} · {latest.referenceAnswer ? '有参考答案' : '暂无参考答案'}</p><div className="record-group-actions"><button className="record-open" onClick={() => setSelectedKey(group.key)}>查看详情 <span>→</span></button><button className="record-review" onClick={() => onReview(group)}>AI 复盘</button>{latest.questionId && latest.typeId && <button className="record-continue" onClick={() => onContinue(latest)}>继续作答</button>}</div></div></article>;
     }) : <div className="empty"><b>复</b><h3>还没有作答记录</h3><p>完成一次练习后，录音、答案和复盘信息会出现在这里。</p></div>}</section>
     <div className="pagination"><button disabled={page <= 1} onClick={() => setPage(page - 1)}>← 上一页</button><span>第 {page} / {totalPages} 页</span><button disabled={page >= totalPages} onClick={() => setPage(page + 1)}>下一页 →</button><form className="page-jump" onSubmit={jump}><input type="number" min="1" max={totalPages} value={jumpPage} onChange={(event) => setJumpPage(event.target.value)} /><button>跳转</button></form></div>
-    {selectedGroup && <div className="modal-backdrop record-detail-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedKey(null); }}><section className="record-detail-modal" role="dialog" aria-modal="true" aria-labelledby="record-detail-title"><button type="button" className="modal-close" aria-label="关闭记录详情" onClick={() => setSelectedKey(null)}>×</button><span className="section-kicker">PRACTICE DETAIL</span><small className="record-detail-meta">{selectedGroup.username ? '学员：' + selectedGroup.username + ' · ' : ''}{selectedGroup.category} · {selectedGroup.attempts.length} 次作答</small><h2 id="record-detail-title">{selectedGroup.question}</h2><div className="record-detail-actions">{selectedGroup.attempts[0].questionId && selectedGroup.attempts[0].typeId && <button className="modal-submit" onClick={() => { onContinue(selectedGroup.attempts[0]); setSelectedKey(null); }}>继续作答</button>}</div><section className="detail-reference">{selectedGroup.attempts[0].referenceAnswer ? <><span className="section-kicker">REFERENCE ANSWER</span><h3>参考答案</h3><p>{selectedGroup.attempts[0].referenceAnswer}</p></> : <><span className="section-kicker">REFERENCE ANSWER</span><h3>暂无参考答案</h3><p>这道题暂时没有配置参考答案。</p></>}</section><div className="detail-attempts"><h3>每次具体作答</h3>{selectedGroup.attempts.map((item, index) => <article className="detail-attempt" key={item.id}><div className="detail-attempt-head"><strong>第 {selectedGroup.attempts.length - index} 次</strong><small>{formatRecordDate(item.createdAt)}</small></div><p className="detail-answer-label">文字作答</p><p className="detail-answer">{item.answer || '本次未填写文字作答。'}</p>{item.hasAudio ? <TranscriptViewer item={item} onTranscribe={() => void transcribe(item)} /> : <p className="no-audio">这次作答没有录音。</p>}</article>)}</div><section className="ai-placeholder"><span className="section-kicker">AI REVIEW · COMING SOON</span><h3>AI 作答评估区域</h3><p>后续可在这里查看表达结构、专业性、流畅度和改进建议。</p></section></section></div>}
+    {selectedGroup && <div className="modal-backdrop record-detail-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedKey(null); }}><section className="record-detail-modal" role="dialog" aria-modal="true" aria-labelledby="record-detail-title"><button type="button" className="modal-close" aria-label="关闭记录详情" onClick={() => setSelectedKey(null)}>×</button><span className="section-kicker">PRACTICE DETAIL</span><small className="record-detail-meta">{selectedGroup.username ? '学员：' + selectedGroup.username + ' · ' : ''}{selectedGroup.category} · {selectedGroup.attempts.length} 次作答</small><h2 id="record-detail-title">{selectedGroup.question}</h2><div className="record-detail-actions"><button className="review-trigger" onClick={() => { onReview(selectedGroup); setSelectedKey(null); }}>进入 AI 复盘</button>{selectedGroup.attempts[0].questionId && selectedGroup.attempts[0].typeId && <button className="modal-submit" onClick={() => { onContinue(selectedGroup.attempts[0]); setSelectedKey(null); }}>继续作答</button>}</div><section className="detail-reference">{selectedGroup.attempts[0].referenceAnswer ? <><span className="section-kicker">REFERENCE ANSWER</span><h3>参考答案</h3><p>{selectedGroup.attempts[0].referenceAnswer}</p></> : <><span className="section-kicker">REFERENCE ANSWER</span><h3>暂无参考答案</h3><p>这道题暂时没有配置参考答案。</p></>}</section><div className="detail-attempts"><h3>每次具体作答</h3>{selectedGroup.attempts.map((item, index) => <article className="detail-attempt" key={item.id}><div className="detail-attempt-head"><strong>第 {selectedGroup.attempts.length - index} 次</strong><small>{formatRecordDate(item.createdAt)}</small></div><p className="detail-answer-label">文字作答</p><p className="detail-answer">{item.answer || '本次未填写文字作答。'}</p>{item.hasAudio ? <TranscriptViewer item={item} onTranscribe={() => void transcribe(item)} /> : <p className="no-audio">这次作答没有录音。</p>}</article>)}</div><section className="ai-placeholder"><span className="section-kicker">AI REVIEW</span><h3>AI 复盘已经独立成页</h3><p>点击上方“进入 AI 复盘”，可以生成评估、查看历史比较并继续对话。</p></section></section></div>}
   </main>;
 }
 function TranscriptViewer({ item, onTranscribe }: { item: RecordItem; onTranscribe: () => void }) {
@@ -480,4 +506,104 @@ function Users() {
     <section className="user-list"><div className="section-heading"><div><span className="section-kicker">ACCOUNT DIRECTORY</span><h2>已有用户</h2></div><em>共 {total} 个账号</em></div><div className="user-table"><div className="user-table-head"><span>用户</span><span>登录账号</span><span>角色</span><span>状态</span><span>操作</span></div>{users.map((item) => <article className="user-row" key={item.id}><div className="user-name"><span className="user-avatar">{item.displayName.slice(0, 1)}</span><strong>{item.displayName}</strong></div><span className="user-username">@{item.username}</span><span>{item.role === 'admin' ? '管理员' : '普通用户'}</span><small className={`status-${item.status}`}>{item.status === 'active' ? '正常' : item.status === 'pending' ? '待审核' : '已拒绝'}</small><div className="user-actions">{item.role !== 'admin' && <button className="delete-user" onClick={() => { setPendingDelete(item); setDeleteRecords(false); }}>删除</button>}</div>{pendingDelete?.id === item.id && <div className="delete-modal"><strong>确定删除 {item.username}？</strong><label><input type="checkbox" checked={deleteRecords} onChange={(event) => setDeleteRecords(event.target.checked)} /> 同时删除该用户的作答记录和录音</label><div><button onClick={() => { setPendingDelete(null); setDeleteRecords(false); }}>取消</button><button className="danger" onClick={() => void remove()}>确定删除</button></div></div>}</article>)}</div><div className="pagination"><button disabled={page <= 1} onClick={() => void load(page - 1)}>← 上一页</button><span>第 {page} / {totalPages} 页</span><button disabled={page >= totalPages} onClick={() => void load(page + 1)}>下一页 →</button><form className="page-jump" onSubmit={jump}><input aria-label="跳转页码" type="number" min="1" max={totalPages} value={jumpPage} onChange={(event) => setJumpPage(event.target.value)} /><button>跳转</button></form></div></section>
     {createOpen && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setCreateOpen(false); }}><form className="create-modal" role="dialog" aria-modal="true" aria-labelledby="create-user-title" onSubmit={create}><button type="button" className="modal-close" aria-label="关闭创建用户弹窗" onClick={() => setCreateOpen(false)}>×</button><span className="section-kicker">NEW ACCOUNT</span><h2 id="create-user-title">创建用户</h2><p>管理员创建的账号会立即生效。</p><label>登录账号<input name="username" autoComplete="username" required /></label><label>显示姓名<input name="displayName" autoComplete="name" required /></label><label>初始密码<input name="password" type="password" autoComplete="new-password" minLength={8} required /></label><label>角色<select name="role"><option value="student">普通用户</option><option value="admin">管理员</option></select></label><button className="modal-submit">创建用户</button></form></div>}
   </main>;
+}
+
+
+
+type AiEvaluation = { id: number; status: string; result: string | null; error: string | null; createdAt: string; completedAt?: string | null };
+type AiMessage = { id: number; role: 'user' | 'assistant'; content: string; evaluationId?: number | null; createdAt?: string };
+
+function ReviewPage({ group, onBack }: { group: RecordGroup; onBack: () => void }) {
+  const [evaluations, setEvaluations] = useState<AiEvaluation[]>([]);
+  const [messages, setMessages] = useState<AiMessage[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [generating, setGenerating] = useState(false);
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatInput, setChatInput] = useState('');
+  const [message, setMessage] = useState('');
+  const questionId = group.questionId;
+  const latest = group.attempts[0];
+  const load = useCallback(async () => {
+    if (!questionId) return;
+    try {
+      const data = await jsonFetch('/api/ai/evaluations?questionId=' + questionId + '&userId=' + group.userId);
+      setEvaluations(data.evaluations || []);
+      setMessages(data.messages || []);
+    } catch (error) { setMessage((error as Error).message); }
+    finally { setLoading(false); }
+  }, [questionId, group.userId]);
+  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    if (!evaluations.some((item) => item.status === 'processing')) return;
+    const timer = window.setInterval(() => { void load(); }, 4000);
+    return () => window.clearInterval(timer);
+  }, [evaluations, load]);
+
+  async function generate() {
+    if (!questionId || generating) return;
+    setGenerating(true); setMessage('');
+    try {
+      const data = await jsonFetch('/api/ai/evaluations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ questionId, userId: group.userId }) });
+      setMessage(data.reused ? '最近一次作答已经评估过，没有新的回答可生成。' : '评估已提交，正在生成，请稍候。');
+      await load();
+    } catch (error) { setMessage((error as Error).message); }
+    finally { setGenerating(false); }
+  }
+  async function sendChat(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const content = chatInput.trim();
+    if (!content || !questionId || chatLoading) return;
+    setChatLoading(true); setMessage('');
+    try {
+      await jsonFetch('/api/ai/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ questionId, userId: group.userId, message: content }) });
+      setChatInput(''); await load();
+    } catch (error) { setMessage((error as Error).message); }
+    finally { setChatLoading(false); }
+  }
+
+  const completed = evaluations.find((item) => item.status === 'completed');
+  const visibleMessages = messages.filter((item) => !(item.role === 'user' && item.content.startsWith('请评估以下食品专业保研面试练习数据')));
+  return <main className="review-page">
+    <div className="review-topbar"><button className="back" onClick={onBack}>← 返回作答记录</button><span className="review-user">{group.username ? '学员：' + group.username : '我的复盘'}</span></div>
+    <header className="review-header"><div><p className="eyebrow">— AI PRACTICE REVIEW</p><h1>复盘这道题</h1><p>把最近最多三次回答放在一起，查看变化、问题和下一步练习方向。</p></div><button className="review-generate" disabled={!questionId || generating} onClick={() => void generate()}>{generating ? '提交中…' : completed ? '检查新回答并评估' : '生成 AI 评估'} <span>→</span></button></header>
+    {message && <div className="management-message">{message}</div>}
+    {!questionId ? <div className="empty"><h3>原题目已经不存在</h3><p>这条记录缺少题目编号，暂时无法建立独立的 AI 对话。</p></div> : <div className="review-grid">
+      <section className="review-main">
+        <div className="review-question-card"><span className="section-kicker">QUESTION</span><h2>{group.question}</h2><div className="review-question-meta"><span>{group.category}</span><span>{group.attempts.length} 次作答</span><span>{latest.hasReferenceAnswer ? '有参考答案' : '暂无参考答案'}</span></div></div>
+        <section className="review-section"><div className="review-section-title"><div><span className="section-kicker">RECENT ATTEMPTS</span><h2>最近的回答</h2></div><small>按时间倒序，最多取 3 次</small></div>{group.attempts.slice(0, 3).map((item, index) => {
+          const segments = parseTranscriptSegments(item.transcriptSegments);
+          return <article className="review-attempt" key={item.id}><div className="review-attempt-head"><strong>第 {group.attempts.length - index} 次</strong><small>{formatRecordDate(item.createdAt)}</small></div><p className="review-answer">{item.answer || '本次没有填写文字作答。'}</p>{item.hasAudio && <audio controls preload="none" src={'/api/records/' + item.id + '/audio'} />}{item.transcript && <div className="review-transcript"><span>录音转写</span><p>{item.transcript}</p>{segments.length > 0 && <div className="review-segments">{segments.map((segment, segmentIndex) => <p key={segment.startMs + '-' + segmentIndex}><time>{formatTranscriptTime(segment.startMs)} - {formatTranscriptTime(segment.endMs)}</time><span>{segment.text}</span></p>)}</div>}</div>}</article>;
+        })}</section>
+        <section className="review-section"><div className="review-section-title"><div><span className="section-kicker">EVALUATIONS</span><h2>评估结果</h2></div><small>{loading ? '正在读取…' : evaluations.length + ' 次评估'}</small></div>{evaluations.length ? evaluations.map((item, index) => <article className="evaluation-card" key={item.id}><div className="evaluation-card-head"><strong>{index === 0 ? '最新评估' : '历史评估 ' + (evaluations.length - index)}</strong><small>{formatRecordDate(item.createdAt)} · {item.status === 'processing' ? '生成中' : item.status === 'completed' ? '已完成' : '失败'}</small></div>{item.status === 'processing' && <p className="evaluation-pending">AI 正在分析最近的回答，请稍候，页面会自动刷新。</p>}{item.status === 'failed' && <p className="evaluation-error">{item.error || '本次评估失败。'}</p>}{item.status === 'completed' && <div className="evaluation-result">{item.result}</div>}</article>) : <div className="review-empty">还没有评估，点击右上角按钮生成第一次评估。</div>}</section>
+      </section>
+      <aside className="review-side"><div className="review-side-head"><span className="section-kicker">COACH CHAT</span><h2>继续和教练对话</h2><p>对话只属于这个学员和这道题，会记住之前的评估与追问。</p></div><div className="chat-messages">{visibleMessages.length ? visibleMessages.map((item) => <div className={'chat-message ' + item.role} key={item.id}><span>{item.role === 'assistant' ? 'AI 教练' : '你'}</span><div>{item.content}</div></div>) : <div className="chat-empty">生成评估后，可以继续追问“如何改进这道题的回答？”</div>}</div><form className="chat-form" onSubmit={sendChat}><textarea value={chatInput} onChange={(event) => setChatInput(event.target.value)} placeholder="例如：请把我的回答改成 90 秒的结构化版本。" disabled={!completed || chatLoading} /><button disabled={!completed || chatLoading || !chatInput.trim()}>{chatLoading ? '发送中…' : '发送消息'}</button></form></aside>
+    </div>}
+  </main>;
+}
+
+function Management() {
+  const [tab, setTab] = useState<'users' | 'questions' | 'ai'>('users');
+  return <main className="management-hub"><header className="management-hub-head"><div><p className="eyebrow">— ADMIN CONSOLE</p><h1>管理后台</h1><p>集中管理用户、题库和 AI 评估配置，后续可以继续扩展更多工具。</p></div></header><nav className="management-tabs"><button className={tab === 'users' ? 'active' : ''} onClick={() => setTab('users')}>用户管理<span>注册审批与账号</span></button><button className={tab === 'questions' ? 'active' : ''} onClick={() => setTab('questions')}>题库管理<span>题目与 Excel</span></button><button className={tab === 'ai' ? 'active' : ''} onClick={() => setTab('ai')}>AI 模型管理<span>平台、模型与提示词</span></button></nav><div className="management-hub-content">{tab === 'users' ? <Users /> : tab === 'questions' ? <QuestionBank /> : <AiConfig />}</div></main>;
+}
+
+type AiClientConfig = { provider: string; baseUrl: string; model: string; apiKeySet: boolean; apiKeyPreview: string; systemPrompt: string };
+
+function AiConfig() {
+  const [config, setConfig] = useState<AiClientConfig | null>(null);
+  const [apiKey, setApiKey] = useState('');
+  const [message, setMessage] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { void jsonFetch('/api/ai/config').then((data) => setConfig(data.config)).catch((error) => setMessage((error as Error).message)).finally(() => setLoading(false)); }, []);
+  if (loading) return <section className="ai-config-page"><p>正在读取 AI 配置…</p></section>;
+  if (!config) return <section className="ai-config-page"><p className="evaluation-error">暂无 AI 配置，请重新加载数据库。</p></section>;
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setSaving(true); setMessage('');
+    try {
+      const data = await jsonFetch('/api/ai/config', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...config, apiKey }) });
+      setConfig(data.config); setApiKey(''); setMessage('AI 配置已保存');
+    } catch (error) { setMessage((error as Error).message); }
+    finally { setSaving(false); }
+  }
+  return <section className="ai-config-page"><div className="ai-config-intro"><span className="section-kicker">MODEL SETTINGS</span><h2>AI 评估模型</h2><p>API Key 只保存在服务器数据库中，页面不会回显完整密钥。接口需要兼容 OpenAI Chat Completions 格式，方便后续切换平台。</p></div>{message && <div className="management-message">{message}</div>}<form className="ai-config-form" onSubmit={save}><label>API 平台<input value={config.provider} onChange={(event) => setConfig({ ...config, provider: event.target.value })} placeholder="例如：bailian" /></label><label>兼容接口地址<input type="url" value={config.baseUrl} onChange={(event) => setConfig({ ...config, baseUrl: event.target.value })} placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1" /></label><label>模型名称<input value={config.model} onChange={(event) => setConfig({ ...config, model: event.target.value })} placeholder="qwen3.8-27b" /></label><label>API Key{config.apiKeySet && <small className="key-preview">当前：{config.apiKeyPreview}（留空表示不修改）</small>}<input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={config.apiKeySet ? '留空保持当前 Key' : '粘贴 API Key'} autoComplete="off" /></label><label className="prompt-field">评估系统提示词<textarea value={config.systemPrompt} onChange={(event) => setConfig({ ...config, systemPrompt: event.target.value })} /></label><button className="modal-submit" disabled={saving}>{saving ? '保存中…' : '保存 AI 配置'}</button></form></section>;
 }

@@ -89,6 +89,39 @@ const schema = [
     INDEX idx_records_user_created (user_id, created_at),
     INDEX idx_records_user_category (user_id, category)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE TABLE IF NOT EXISTS ai_settings (
+    id TINYINT UNSIGNED NOT NULL PRIMARY KEY,
+    provider VARCHAR(50) NOT NULL DEFAULT 'bailian',
+    base_url VARCHAR(500) NOT NULL DEFAULT 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    model VARCHAR(150) NOT NULL DEFAULT 'qwen3.8-27b',
+    api_key TEXT NULL,
+    system_prompt LONGTEXT NOT NULL,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE TABLE IF NOT EXISTS ai_evaluations (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT UNSIGNED NOT NULL,
+    question_id BIGINT UNSIGNED NOT NULL,
+    input_hash CHAR(64) NOT NULL,
+    input_snapshot LONGTEXT NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'processing',
+    result LONGTEXT NULL,
+    error TEXT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at DATETIME NULL,
+    UNIQUE KEY uq_ai_evaluation_input (user_id, question_id, input_hash),
+    INDEX idx_ai_evaluations_conversation (user_id, question_id, created_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE TABLE IF NOT EXISTS ai_messages (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT UNSIGNED NOT NULL,
+    question_id BIGINT UNSIGNED NOT NULL,
+    evaluation_id BIGINT UNSIGNED NULL,
+    role VARCHAR(20) NOT NULL,
+    content LONGTEXT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_ai_messages_conversation (user_id, question_id, created_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 ];
 
 async function hasColumn(db: Pool, table: string, column: string) {
@@ -154,11 +187,30 @@ async function ensurePracticeRecordColumns(db: Pool) {
     if (!(await hasColumn(db, 'practice_records', name))) await db.query('ALTER TABLE practice_records ADD COLUMN ' + name + ' ' + definition);
   }
 }
+async function ensureAiColumns(db: Pool) {
+  const tableColumns: Array<[string, string, string]> = [
+    ['ai_settings', 'provider', "VARCHAR(50) NOT NULL DEFAULT 'bailian'"],
+    ['ai_settings', 'base_url', "VARCHAR(500) NOT NULL DEFAULT 'https://dashscope.aliyuncs.com/compatible-mode/v1'"],
+    ['ai_settings', 'model', "VARCHAR(150) NOT NULL DEFAULT 'qwen3.8-27b'"],
+    ['ai_settings', 'api_key', 'TEXT NULL'],
+    ['ai_settings', 'system_prompt', 'LONGTEXT NULL'],
+    ['ai_evaluations', 'input_hash', 'CHAR(64) NULL'],
+    ['ai_evaluations', 'input_snapshot', 'LONGTEXT NULL'],
+    ['ai_evaluations', 'status', "VARCHAR(20) NOT NULL DEFAULT 'processing'"],
+    ['ai_evaluations', 'result', 'LONGTEXT NULL'],
+    ['ai_evaluations', 'error', 'TEXT NULL'],
+    ['ai_evaluations', 'completed_at', 'DATETIME NULL'],
+  ];
+  for (const [table, column, definition] of tableColumns) {
+    if (!(await hasColumn(db, table, column))) await db.query('ALTER TABLE ' + table + ' ADD COLUMN ' + column + ' ' + definition);
+  }
+}
 async function initializeDatabase(db: Pool) {
   for (const statement of schema) await db.query(statement);
   await db.query("ALTER TABLE users MODIFY COLUMN status ENUM('pending', 'active', 'rejected', 'deleted') NOT NULL DEFAULT 'active'");
   await ensureQuestionColumns(db);
   await ensurePracticeRecordColumns(db);
+  await ensureAiColumns(db);
   if (!(await hasColumn(db, 'user_settings', 'avoid_repeated'))) {
     await db.query('ALTER TABLE user_settings ADD COLUMN avoid_repeated TINYINT(1) NOT NULL DEFAULT 0');
   }
@@ -204,6 +256,19 @@ async function initializeDatabase(db: Pool) {
   }
 
   await db.query('INSERT IGNORE INTO user_settings (user_id) SELECT id FROM users');
+
+  const [aiSettingRows] = await db.query<RowDataPacket[]>('SELECT COUNT(*) AS count FROM ai_settings');
+  if (Number(aiSettingRows[0].count) === 0) {
+    await db.query(
+      'INSERT INTO ai_settings (id, provider, base_url, model, api_key, system_prompt) VALUES (1, ?, ?, ?, NULL, ?)',
+      [
+        'bailian',
+        'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        'qwen3.8-27b',
+        '你是一名资深的食品专业保研面试评估老师，熟悉食品科学与工程、食品质量与安全等方向的笔试和面试要求。\n请根据题目类型、题目内容以及学员最近最多三次回答，客观、具体、可执行地评估学员表现。重点找出回答中的问题和改进方向，同时肯定做得好的地方。\n请关注：专业知识准确性、回答结构、论据与案例、表达清晰度、逻辑连贯性、英语表达（如果是英语题）、思考停顿与回答节奏（如果提供了带时间戳的文字切片）。\n请使用简洁的 Markdown 输出，包含：总体评价、做得好的地方、主要问题、下一步改进建议、参考回答框架、与前几次相比的进步或退步。不要编造学员没有提供的经历或事实。',
+      ],
+    );
+  }
 }
 
 export async function getDb() {
