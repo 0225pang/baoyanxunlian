@@ -207,6 +207,27 @@ const schema = [
     followup_question TEXT NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_simulation_answers_session_module (session_id, module_index)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,  `CREATE TABLE IF NOT EXISTS user_api_limits (
+    user_id BIGINT UNSIGNED NOT NULL PRIMARY KEY,
+    ai_enabled TINYINT(1) NOT NULL DEFAULT 1,
+    asr_enabled TINYINT(1) NOT NULL DEFAULT 1,
+    realtime_asr_enabled TINYINT(1) NOT NULL DEFAULT 1,
+    ai_token_limit BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    asr_request_limit INT UNSIGNED NOT NULL DEFAULT 0,
+    realtime_seconds_limit BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE TABLE IF NOT EXISTS api_usage_logs (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT UNSIGNED NOT NULL,
+    feature VARCHAR(30) NOT NULL,
+    input_tokens BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    output_tokens BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    audio_seconds BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    request_count INT UNSIGNED NOT NULL DEFAULT 1,
+    model VARCHAR(150) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_api_usage_user_feature_created (user_id, feature, created_at)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 ];
 
@@ -345,6 +366,7 @@ async function initializeDatabase(db: Pool) {
   }
 
   await db.query('INSERT IGNORE INTO user_settings (user_id) SELECT id FROM users');
+  await db.query('INSERT IGNORE INTO user_api_limits (user_id) SELECT id FROM users');
 
   const [aiSettingRows] = await db.query<RowDataPacket[]>('SELECT COUNT(*) AS count FROM ai_settings');
   if (Number(aiSettingRows[0].count) === 0) {

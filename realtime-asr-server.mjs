@@ -35,6 +35,21 @@ function verifyAccessToken(token) {
     return Number(value.userId) > 0 && Number(value.expiresAt) > Date.now();
   } catch { return false; }
 }
+function accessTokenUserId(token) {
+  if (!verifyAccessToken(token) || typeof token !== 'string') return 0;
+  try { return Number(JSON.parse(Buffer.from(token.split('.')[0], 'base64url').toString('utf8')).userId) || 0; } catch { return 0; }
+}
+
+async function realtimeQuota(userId) {
+  await database.query('INSERT IGNORE INTO user_api_limits (user_id) VALUES (?)', [userId]);
+  const [limits] = await database.query('SELECT realtime_asr_enabled AS enabled, realtime_seconds_limit AS secondsLimit FROM user_api_limits WHERE user_id = ? LIMIT 1', [userId]);
+  const limit = limits[0];
+  if (!limit?.enabled) throw new Error('实时转写已被管理员关闭');
+  const [usageRows] = await database.query(`SELECT COALESCE(SUM(audio_seconds), 0) AS seconds FROM api_usage_logs WHERE user_id = ? AND feature = 'realtime_asr' AND created_at >= DATE_FORMAT(CURRENT_DATE, '%Y-%m-01')`, [userId]);
+  const cap = Number(limit.secondsLimit || 0); const used = Number(usageRows[0]?.seconds || 0);
+  if (cap > 0 && used >= cap) throw new Error('实时转写本月额度已用完');
+  return cap > 0 ? cap - used : 0;
+}
 async function getSettings() {
   const [rows] = await database.query(
     'SELECT provider, websocket_url AS websocketUrl, model, api_key AS apiKey FROM realtime_asr_settings WHERE id = 1 LIMIT 1',
@@ -77,7 +92,14 @@ server.on('connection', (client) => {
   let started = false;
   let finishing = false;
   let upstreamTaskStarted = false;
+  let usageUserId = 0; let usageStartedAt = 0; let usageModel = ''; let usageLogged = false; let quotaTimer = null;
   const pendingAudio = [];
+  const recordUsage = () => {
+    if (usageLogged || !usageUserId || !usageStartedAt || !upstreamTaskStarted) return;
+    usageLogged = true; if (quotaTimer) clearTimeout(quotaTimer);
+    const audioSeconds = Math.max(1, Math.ceil((Date.now() - usageStartedAt) / 1000));
+    void database.query('INSERT INTO api_usage_logs (user_id, feature, audio_seconds, request_count, model) VALUES (?, ?, ?, ?, ?)', [usageUserId, 'realtime_asr', audioSeconds, 1, usageModel || null]).catch((error) => console.error('Realtime ASR usage log failed:', error));
+  };
   const closeUpstream = (force = false) => {
     if (!upstream) return;
     if (upstream.readyState === WebSocket.OPEN && !finishing && taskId) {
@@ -108,13 +130,17 @@ server.on('connection', (client) => {
     try { message = JSON.parse(raw.toString()); } catch { send(client, { type: 'error', error: '实时转写请求格式无效' }); return; }
     if (message.action === 'finish') { closeUpstream(); return; }
     if (message.action !== 'start' || started) return;
-    if (!verifyAccessToken(message.token)) { send(client, { type: 'error', error: '实时转写授权已失效，请重新开始本段录音' }); client.close(1008, 'unauthorized'); return; }
+    const userId = accessTokenUserId(message.token);
+    if (!userId) { send(client, { type: 'error', error: '实时转写授权已失效，请重新开始本段录音' }); client.close(1008, 'unauthorized'); return; }
+    let remainingSeconds = 0;
+    try { remainingSeconds = await realtimeQuota(userId); } catch (error) { send(client, { type: 'error', error: error instanceof Error ? error.message : '实时转写不可用' }); client.close(1008, 'quota'); return; }
 
-    started = true;
+    usageUserId = userId; started = true;
     const sampleRate = Number(message.sampleRate) || 16000;
     taskId = String(message.taskId || randomUUID());
     try {
-      const setting = await getSettings();
+      const setting = await getSettings(); usageModel = setting.model;
+      if (remainingSeconds > 0) quotaTimer = setTimeout(() => { send(client, { type: 'error', error: '实时转写本段已达到本月剩余额度，录音将停止' }); recordUsage(); closeUpstream(true); try { client.close(1008, 'quota reached'); } catch { /* closed */ } }, remainingSeconds * 1000);
       upstream = new WebSocket(setting.websocketUrl, { headers: { Authorization: `Bearer ${setting.apiKey}` }, maxPayload: MAX_MESSAGE_BYTES });
       upstream.on('open', () => {
         if (!upstream) return;
@@ -126,7 +152,7 @@ server.on('connection', (client) => {
           const payload = JSON.parse(data.toString());
           const header = payload?.header || {};
           if (header.event === 'task-started') {
-            upstreamTaskStarted = true;
+            upstreamTaskStarted = true; usageStartedAt = Date.now();
             for (const audio of pendingAudio.splice(0)) upstream?.send(audio, { binary: true });
             send(client, { type: 'ready' });
             return;
@@ -154,8 +180,8 @@ server.on('connection', (client) => {
       client.close(1011, 'configuration error');
     }
   });
-  client.on('close', () => closeUpstream(true));
-  client.on('error', () => closeUpstream(true));
+  client.on('close', () => { recordUsage(); closeUpstream(true); });
+  client.on('error', () => { recordUsage(); closeUpstream(true); });
 });
 
 server.on('listening', () => console.log(`Realtime ASR proxy listening on :${PORT}`));

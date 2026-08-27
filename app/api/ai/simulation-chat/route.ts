@@ -1,6 +1,7 @@
 import { apiError, requireUser } from '@/lib/auth';
 import { chatCompletionsUrl, extractChatContent, getActiveAiConfig, safeJsonParse } from '@/lib/ai';
 import { query } from '@/lib/db';
+import { assertApiAccess, logApiUsage, readTokenUsage } from '@/lib/usage';
 import type { RowDataPacket } from 'mysql2/promise';
 
 type ChatPayload = { sessionId?: number; message?: string };
@@ -33,6 +34,7 @@ export async function POST(request: Request) {
 
     const config = await getActiveAiConfig();
     if (!config?.apiKey) return Response.json({ error: '请先在管理后台配置 AI 模型 API Key' }, { status: 503 });
+    await assertApiAccess(Number(session.userId), 'ai');
 
     // Keep the context small and deterministic: the selected session plus the
     // immediately preceding session for the same student and school flow.
@@ -93,13 +95,14 @@ export async function POST(request: Request) {
           if (!response.body) throw new Error('AI 未返回可读取的数据流');
           const reader = response.body.getReader();
           const decoder = new TextDecoder();
-          let buffer = ''; let source = ''; let raw = ''; let reply = '';
+          let buffer = ''; let source = ''; let raw = ''; let reply = ''; let inputTokens = 0; let outputTokens = 0;
           const consumeLine = (line: string) => {
             if (!line.startsWith('data:')) return;
             const value = line.slice(5).trim();
             if (!value || value === '[DONE]') return;
             raw += value;
-            const content = streamContent(safeJsonParse(value));
+            const payload = safeJsonParse(value); const usage = readTokenUsage(payload); inputTokens = Math.max(inputTokens, usage.inputTokens); outputTokens = Math.max(outputTokens, usage.outputTokens);
+            const content = streamContent(payload);
             if (content) { reply += content; send({ type: 'delta', content }); }
           };
           while (true) {
@@ -117,6 +120,7 @@ export async function POST(request: Request) {
             if (fallback) { reply = fallback; send({ type: 'delta', content: fallback }); }
           }
           if (!reply) throw new Error('AI 返回内容为空');
+          await logApiUsage(Number(session.userId), 'ai', { inputTokens: inputTokens || Math.ceil(JSON.stringify(context).length / 2), outputTokens: outputTokens || Math.ceil(reply.length / 2), model: config.model });
           send({ type: 'done', content: '' });
         } catch (error) {
           send({ type: 'error', error: error instanceof Error ? error.message : String(error) });

@@ -1,6 +1,7 @@
 import { apiError, requireUser } from '@/lib/auth';
 import { execute, query } from '@/lib/db';
 import { chatCompletionsUrl, extractChatContent, getActiveAiConfig, hashEvaluationInput, safeJsonParse, type ActiveAiConfig } from '@/lib/ai';
+import { assertApiAccess, logApiUsage, readTokenUsage } from '@/lib/usage';
 import type { RowDataPacket } from 'mysql2/promise';
 
 type EvaluationInput = {
@@ -38,6 +39,8 @@ async function runEvaluation(evaluationId: number, userId: number, questionId: n
     if (!result) throw new Error('AI 返回内容为空');
     await execute('UPDATE ai_evaluations SET status = \'completed\', result = ?, error = NULL, completed_at = CURRENT_TIMESTAMP WHERE id = ?', [result, evaluationId]);
     await execute('INSERT INTO ai_messages (user_id, question_id, evaluation_id, role, content) VALUES (?, ?, ?, ?, ?)', [userId, questionId, evaluationId, 'assistant', result]);
+    const usage = readTokenUsage(payload);
+    await logApiUsage(userId, 'ai', { inputTokens: usage.inputTokens || Math.ceil(prompt.length / 2), outputTokens: usage.outputTokens || Math.ceil(result.length / 2), model: config.model });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await execute('UPDATE ai_evaluations SET status = \'failed\', error = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?', [message.slice(0, 2000), evaluationId]).catch(() => undefined);
@@ -105,6 +108,7 @@ export async function POST(request: Request) {
     if (existing[0]) return Response.json({ status: existing[0].status, evaluationId: Number(existing[0].id), result: existing[0].result || null, error: existing[0].error || null, reused: true }, { status: existing[0].status === 'processing' ? 202 : 200 });
     const config = await getActiveAiConfig();
     if (!config?.apiKey) return Response.json({ error: 'AI 尚未配置 API Key，请先到管理后台填写' }, { status: 503 });
+    await assertApiAccess(userId, 'ai');
     const previousRows = await query<RowDataPacket[]>('SELECT result FROM ai_evaluations WHERE user_id = ? AND question_id = ? AND status = \'completed\' ORDER BY id DESC LIMIT 1', [userId, questionId]);
     const previousResult = previousRows[0]?.result ? String(previousRows[0].result) : '';
     const prompt = buildUserPrompt(input) + (previousResult ? '\n\n上一轮 AI 评估结果（请结合新回答判断进步或退步）：\n' + previousResult : '');

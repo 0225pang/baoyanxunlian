@@ -8,6 +8,7 @@ import {
   getAsrConfig,
 } from '@/lib/asr';
 import type { RowDataPacket } from 'mysql2/promise';
+import { assertApiAccess, logApiUsage } from '@/lib/usage';
 
 export const runtime = 'nodejs';
 
@@ -37,7 +38,7 @@ function readJson(raw: string): unknown {
   }
 }
 
-async function transcribeInBackground(id: number, audioUrl: string) {
+async function transcribeInBackground(id: number, userId: number, audioUrl: string) {
   try {
     const config = await getAsrConfig();
     const submitResponse = await fetch(config.submitUrl, {
@@ -58,6 +59,7 @@ async function transcribeInBackground(id: number, audioUrl: string) {
     if (!submitResponse.ok) {
       throw new Error('百炼 ASR 提交失败 ' + submitResponse.status + ': ' + submitRaw.slice(0, 500));
     }
+    await logApiUsage(userId, 'asr', { requestCount: 1, model: config.model });
 
     const taskId = findString(submitPayload, 'task_id');
     if (!taskId) throw new Error('百炼 ASR 未返回 task_id');
@@ -139,6 +141,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       return Response.json({ status: 'completed', transcript: row.transcript });
     }
 
+    await assertApiAccess(Number(row.user_id), 'asr');
+
     const baseUrl = publicBaseUrl(request, config.publicBaseUrl);
     if (/^(https?:\/\/)(localhost|127\.0\.0\.1|0\.0\.0\.0|app(?::|\/))/i.test(baseUrl)) {
       return Response.json({ error: '百炼无法访问本机地址，请配置公网 ASR_PUBLIC_BASE_URL' }, { status: 503 });
@@ -151,7 +155,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       'UPDATE practice_records SET transcript_status = \'processing\', transcript_error = NULL, transcript_started_at = CURRENT_TIMESTAMP WHERE id = ?',
       [id],
     );
-    void transcribeInBackground(id, audioUrl);
+    void transcribeInBackground(id, Number(row.user_id), audioUrl);
     return Response.json({ status: 'processing', message: '已提交百炼转写任务，请稍候查看' }, { status: 202 });
   } catch (error) {
     return apiError(error);

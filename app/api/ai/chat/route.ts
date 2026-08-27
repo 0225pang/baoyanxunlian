@@ -1,6 +1,7 @@
 import { apiError, requireUser } from '@/lib/auth';
 import { execute, query } from '@/lib/db';
 import { chatCompletionsUrl, extractChatContent, getActiveAiConfig, safeJsonParse } from '@/lib/ai';
+import { assertApiAccess, logApiUsage, readTokenUsage } from '@/lib/usage';
 import type { RowDataPacket } from 'mysql2/promise';
 
 function streamContent(payload: unknown) {
@@ -28,6 +29,7 @@ export async function POST(request: Request) {
     if (!Number.isInteger(questionId) || questionId <= 0 || !message) return Response.json({ error: '问题和消息不能为空' }, { status: 400 });
     const config = await getActiveAiConfig();
     if (!config?.apiKey) return Response.json({ error: 'AI 尚未配置 API Key，请联系管理员' }, { status: 503 });
+    await assertApiAccess(userId, 'ai');
     const existing = await query<RowDataPacket[]>('SELECT id, role, content FROM ai_messages WHERE user_id = ? AND question_id = ? AND evaluation_id IS NULL ORDER BY id ASC', [userId, questionId]);
     const history = existing.slice(-30).map((item) => ({ role: String(item.role), content: String(item.content) }));
     const contextRows = await query<RowDataPacket[]>(`SELECT q.content, q.answer AS referenceAnswer, q.subcategory,
@@ -75,13 +77,14 @@ export async function POST(request: Request) {
           if (!response.body) throw new Error('AI 未返回可读取的数据流');
           const reader = response.body.getReader();
           const decoder = new TextDecoder();
-          let buffer = ''; let raw = ''; let source = ''; let reply = '';
+          let buffer = ''; let raw = ''; let source = ''; let reply = ''; let inputTokens = 0; let outputTokens = 0;
           const consumeLine = (line: string) => {
             if (!line.startsWith('data:')) return;
             const value = line.slice(5).trim();
             if (!value || value === '[DONE]') return;
             raw += value;
-            const content = streamContent(safeJsonParse(value));
+            const payload = safeJsonParse(value); const usage = readTokenUsage(payload); inputTokens = Math.max(inputTokens, usage.inputTokens); outputTokens = Math.max(outputTokens, usage.outputTokens);
+            const content = streamContent(payload);
             if (content) { reply += content; send({ type: 'delta', content }); }
           };
           while (true) {
@@ -100,6 +103,7 @@ export async function POST(request: Request) {
           }
           if (!reply) throw new Error('AI 返回内容为空');
           await execute('INSERT INTO ai_messages (user_id, question_id, role, content) VALUES (?, ?, ?, ?)', [userId, questionId, 'assistant', reply]);
+          await logApiUsage(userId, 'ai', { inputTokens: inputTokens || Math.ceil(JSON.stringify(trainingContext).length / 2), outputTokens: outputTokens || Math.ceil(reply.length / 2), model: config.model });
           send({ type: 'done', content: '' });
         } catch (error) {
           send({ type: 'error', error: error instanceof Error ? error.message : String(error) });
