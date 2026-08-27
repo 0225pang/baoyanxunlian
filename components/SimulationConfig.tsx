@@ -24,7 +24,7 @@ type SimulationTemplate = {
   name: string;
   description: string;
   totalSeconds: number | null;
-  moduleTimeoutMode?: "warn" | "auto_advance";
+  moduleTimeoutMode?: "warn" | "immediate_advance" | "auto_advance";
   modules: SimulationStep[] | string;
   followupPrompt?: string;
   isActive?: boolean;
@@ -351,11 +351,15 @@ export default function SimulationConfig() {
                       updateTemplate({
                         moduleTimeoutMode: event.target.value as
                           | "warn"
+                          | "immediate_advance"
                           | "auto_advance",
                       })
                     }
                   >
                     <option value="warn">仅提示，不自动结束</option>
+                    <option value="immediate_advance">
+                      达到建议时长后自动进入下一题
+                    </option>
                     <option value="auto_advance">
                       超出建议时长 50% 后自动进入下一题
                     </option>

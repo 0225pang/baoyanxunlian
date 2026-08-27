@@ -993,7 +993,7 @@ type SimulationTemplate = {
   name: string;
   description: string;
   totalSeconds: number;
-  moduleTimeoutMode?: "warn" | "auto_advance";
+  moduleTimeoutMode?: "warn" | "immediate_advance" | "auto_advance";
   modules: SimulationStep[] | string;
   followupPrompt?: string;
   isActive?: boolean;
@@ -1272,7 +1272,7 @@ function Simulation({ onBack }: { onBack: () => void }) {
     if (
       !sessionId ||
       !current ||
-      moduleTimeoutMode !== "auto_advance" ||
+      !["immediate_advance", "auto_advance"].includes(moduleTimeoutMode) ||
       !Number.isFinite(suggestedSeconds) ||
       suggestedSeconds < 1 ||
       !recording ||
@@ -1283,12 +1283,19 @@ function Simulation({ onBack }: { onBack: () => void }) {
     const answerSeconds = Math.floor(
       (Date.now() - segmentRecordingStartedAt.current) / 1000,
     );
-    const cutoffSeconds = Math.ceil(suggestedSeconds * 1.5);
-    if (answerSeconds <= cutoffSeconds) return;
+    const cutoffSeconds =
+      moduleTimeoutMode === "immediate_advance"
+        ? suggestedSeconds
+        : Math.ceil(suggestedSeconds * 1.5);
+    if (answerSeconds < cutoffSeconds) return;
     const timeoutKey = `${sessionId}:${stepIndex}:${followupRound}:${segmentRecordingStartedAt.current}`;
     if (moduleTimeoutRef.current === timeoutKey) return;
     moduleTimeoutRef.current = timeoutKey;
-    setMessage("已超过本环节建议时长的 50%，正在保存并进入下一题。");
+    setMessage(
+      moduleTimeoutMode === "immediate_advance"
+        ? "已到本环节建议时长，正在保存并进入下一题。"
+        : "已超过本环节建议时长的 50%，正在保存并进入下一题。",
+    );
     void (async () => {
       const audio = await stopRecording();
       const transcript = liveTranscriptRef.current || answer;
@@ -1969,9 +1976,11 @@ function Simulation({ onBack }: { onBack: () => void }) {
           {Number(current.timeSeconds) > 0 &&
           stepElapsed > Number(current.timeSeconds) ? (
             <small className="simulation-overtime-hint">
-              {moduleTimeoutMode === "auto_advance"
-                ? "超过 50% 后将自动进入下一题"
-                : "已超出建议时长，仍可继续作答"}
+              {moduleTimeoutMode === "immediate_advance"
+                ? "已到建议时长将自动进入下一题"
+                : moduleTimeoutMode === "auto_advance"
+                  ? "超过 50% 后将自动进入下一题"
+                  : "已超出建议时长，仍可继续作答"}
             </small>
           ) : null}
         </div>
@@ -2028,7 +2037,11 @@ function Simulation({ onBack }: { onBack: () => void }) {
               ? "系统会结合此前的自我介绍、项目介绍和作答内容生成问题；不会在此阶段开启录音。"
               : current.kind === "dynamic"
                 ? "这道自由交流题由此前回答动态生成。"
-                : "本环节超过建议时长只会提醒；全程时间到后应结束模拟。"}
+                : moduleTimeoutMode === "immediate_advance"
+                  ? "达到本环节建议时长后，会自动保存并进入下一题；全程时间到后结束模拟。"
+                  : moduleTimeoutMode === "auto_advance"
+                    ? "超出本环节建议时长 50% 后，会自动保存并进入下一题；全程时间到后结束模拟。"
+                    : "本环节超过建议时长只会提醒；全程时间到后应结束模拟。"}
         </p>
         {dynamicPending && (
           <div className="simulation-generating">

@@ -27,7 +27,7 @@ export async function PATCH(request: Request) {
     if (body.template) {
       const item = body.template; const name = String(item.name || '').trim(); const modules = Array.isArray(item.modules) ? item.modules : [];
       const totalSeconds = Math.floor(Number(item.totalSeconds));
-      const moduleTimeoutMode = item.moduleTimeoutMode === 'auto_advance' ? 'auto_advance' : 'warn';
+      const moduleTimeoutMode = ['immediate_advance', 'auto_advance'].includes(String(item.moduleTimeoutMode)) ? String(item.moduleTimeoutMode) : 'warn';
       if (!name || !modules.length) return Response.json({ error: '模拟名称和至少一个模块不能为空' }, { status: 400 });
       if (!Number.isFinite(totalSeconds) || totalSeconds < 1) return Response.json({ error: '总时长不能为空，且必须是大于 0 的秒数。' }, { status: 400 });
       if (modules.some((module) => module && typeof module === 'object' && ['fixed', 'intro', 'dynamic'].includes(String((module as { kind?: unknown }).kind || '')) && !String((module as { prompt?: unknown }).prompt || '').trim())) return Response.json({ error: '固定题目、开场任务或动态提问提示词不能为空，请补充内容' }, { status: 400 });

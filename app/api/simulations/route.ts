@@ -124,7 +124,7 @@ export async function POST(request: Request) {
           id: Number(template.id),
           name: template.name,
           totalSeconds: Number(template.totalSeconds),
-          moduleTimeoutMode: template.moduleTimeoutMode === "auto_advance" ? "auto_advance" : "warn",
+          moduleTimeoutMode: ["immediate_advance", "auto_advance"].includes(String(template.moduleTimeoutMode)) ? template.moduleTimeoutMode : "warn",
         },
         steps,
       },
