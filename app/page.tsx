@@ -993,6 +993,7 @@ type SimulationTemplate = {
   name: string;
   description: string;
   totalSeconds: number;
+  moduleTimeoutMode?: "warn" | "auto_advance";
   modules: SimulationStep[] | string;
   followupPrompt?: string;
   isActive?: boolean;
@@ -1116,6 +1117,8 @@ function Simulation({ onBack }: { onBack: () => void }) {
   const fullChunks = useRef<Blob[]>([]);
   const fullAudioRef = useRef<Blob | null>(null);
   const finishedRef = useRef(false);
+  const moduleTimeoutRef = useRef("");
+  const segmentRecordingStartedAt = useRef(0);
   const speechRunId = useRef(0);
   const audioContext = useRef<AudioContext | null>(null);
   const [liveTranscript, setLiveTranscript] = useState("");
@@ -1204,6 +1207,9 @@ function Simulation({ onBack }: { onBack: () => void }) {
   const current = steps[stepIndex];
   const totalSeconds =
     templates.find((item) => item.id === Number(templateId))?.totalSeconds || 0;
+  const moduleTimeoutMode =
+    templates.find((item) => item.id === Number(templateId))
+      ?.moduleTimeoutMode || "warn";
   const stepElapsed = stepStartedAt
     ? Math.max(0, Math.floor((Date.now() - stepStartedAt) / 1000))
     : 0;
@@ -1260,6 +1266,77 @@ function Simulation({ onBack }: { onBack: () => void }) {
     stepIndex,
     followup,
     stepStartedAt,
+  ]);
+  useEffect(() => {
+    const suggestedSeconds = Math.floor(Number(current?.timeSeconds));
+    if (
+      !sessionId ||
+      !current ||
+      moduleTimeoutMode !== "auto_advance" ||
+      !Number.isFinite(suggestedSeconds) ||
+      suggestedSeconds < 1 ||
+      !recording ||
+      !segmentRecordingStartedAt.current ||
+      finishedRef.current
+    )
+      return;
+    const answerSeconds = Math.floor(
+      (Date.now() - segmentRecordingStartedAt.current) / 1000,
+    );
+    const cutoffSeconds = Math.ceil(suggestedSeconds * 1.5);
+    if (answerSeconds <= cutoffSeconds) return;
+    const timeoutKey = `${sessionId}:${stepIndex}:${followupRound}:${segmentRecordingStartedAt.current}`;
+    if (moduleTimeoutRef.current === timeoutKey) return;
+    moduleTimeoutRef.current = timeoutKey;
+    setMessage("已超过本环节建议时长的 50%，正在保存并进入下一题。");
+    void (async () => {
+      const audio = await stopRecording();
+      const transcript = liveTranscriptRef.current || answer;
+      const activeQuestion =
+        followup || current.question || current.prompt || "";
+      const saved =
+        transcript.trim() || audio
+          ? saveCurrent(
+              undefined,
+              activeQuestion,
+              followup || undefined,
+              audio,
+            )
+          : null;
+      const nextDrafts = saved ? [...drafts, saved] : drafts;
+      setFollowup(null);
+      setFollowupRound(0);
+      setFollowupTurns([]);
+      segmentRecordingStartedAt.current = 0;
+      if (stepIndex + 1 < steps.length) {
+        const nextIndex = stepIndex + 1;
+        const nextStep = steps[nextIndex];
+        setStepIndex(nextIndex);
+        setDynamicQuestionError("");
+        if (nextStep?.kind === "dynamic" && !nextStep.question) {
+          setStepStartedAt(0);
+          setCountdown(null);
+          void generateDynamicQuestion(nextIndex, nextDrafts);
+        } else {
+          setStepStartedAt(Date.now());
+        }
+      } else {
+        finishedRef.current = true;
+        await finish(nextDrafts);
+      }
+    })();
+  }, [
+    answer,
+    current,
+    drafts,
+    elapsed,
+    followup,
+    followupRound,
+    moduleTimeoutMode,
+    recording,
+    sessionId,
+    stepIndex,
+    steps,
   ]);
   async function startFullRecording() {
     try {
@@ -1517,6 +1594,8 @@ function Simulation({ onBack }: { onBack: () => void }) {
       setFullAudio(null);
       fullAudioRef.current = null;
       finishedRef.current = false;
+      moduleTimeoutRef.current = "";
+      segmentRecordingStartedAt.current = 0;
       setReading(false);
       setDynamicQuestionError("");
       setCountdown(firstDynamic ? null : 3);
@@ -1549,6 +1628,7 @@ function Simulation({ onBack }: { onBack: () => void }) {
       };
       recorder.current = value;
       value.start();
+      segmentRecordingStartedAt.current = Date.now();
       setRecording(true);
       void startRealtimeTranscription(media);
     } catch {
@@ -1886,6 +1966,14 @@ function Simulation({ onBack }: { onBack: () => void }) {
           >
             {format(current.timeSeconds || 0)}
           </strong>
+          {Number(current.timeSeconds) > 0 &&
+          stepElapsed > Number(current.timeSeconds) ? (
+            <small className="simulation-overtime-hint">
+              {moduleTimeoutMode === "auto_advance"
+                ? "超过 50% 后将自动进入下一题"
+                : "已超出建议时长，仍可继续作答"}
+            </small>
+          ) : null}
         </div>
       </div>
       <ol className="simulation-puzzle">

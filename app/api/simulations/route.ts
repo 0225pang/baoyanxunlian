@@ -18,7 +18,7 @@ export async function GET() {
   try {
     await requireUser();
     const templates = await query(
-      "SELECT id, name, description, modules, total_seconds AS totalSeconds FROM simulation_templates WHERE is_active = 1 ORDER BY id ASC",
+      "SELECT id, name, description, modules, total_seconds AS totalSeconds, module_timeout_mode AS moduleTimeoutMode FROM simulation_templates WHERE is_active = 1 ORDER BY id ASC",
     );
     return Response.json({ templates });
   } catch (error) {
@@ -31,7 +31,7 @@ export async function POST(request: Request) {
     const user = await requireUser();
     const body = (await request.json()) as { templateId?: number };
     const rows = await query<RowDataPacket[]>(
-      "SELECT id, name, modules, total_seconds AS totalSeconds FROM simulation_templates WHERE id = ? AND is_active = 1 LIMIT 1",
+      "SELECT id, name, modules, total_seconds AS totalSeconds, module_timeout_mode AS moduleTimeoutMode FROM simulation_templates WHERE id = ? AND is_active = 1 LIMIT 1",
       [Number(body.templateId)],
     );
     const template = rows[0];
@@ -124,6 +124,7 @@ export async function POST(request: Request) {
           id: Number(template.id),
           name: template.name,
           totalSeconds: Number(template.totalSeconds),
+          moduleTimeoutMode: template.moduleTimeoutMode === "auto_advance" ? "auto_advance" : "warn",
         },
         steps,
       },

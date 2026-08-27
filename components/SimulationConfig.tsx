@@ -23,7 +23,8 @@ type SimulationTemplate = {
   id: number;
   name: string;
   description: string;
-  totalSeconds: number;
+  totalSeconds: number | null;
+  moduleTimeoutMode?: "warn" | "auto_advance";
   modules: SimulationStep[] | string;
   followupPrompt?: string;
   isActive?: boolean;
@@ -321,17 +322,47 @@ export default function SimulationConfig() {
                   总时长（秒）
                   <input
                     type="number"
-                    min="60"
-                    value={selected.totalSeconds}
+                    step="1"
+                    value={selected.totalSeconds ?? ""}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      updateTemplate({
+                        totalSeconds: value === "" ? null : Number(value),
+                      });
+                    }}
+                  />
+                </label>
+                <label className="template-description">
+                  流程说明
+                  <textarea
+                    value={selected.description || ""}
+                    onChange={(event) =>
+                      updateTemplate({ description: event.target.value })
+                    }
+                    placeholder="例如：中文自我介绍、专业课提问与自由交流，全程约 25 分钟。"
+                  />
+                  <small>显示在学员选择模拟流程的卡片中。</small>
+                </label>
+                <label className="module-timeout-policy">
+                  模块超时策略
+                  <select
+                    value={selected.moduleTimeoutMode || "warn"}
                     onChange={(event) =>
                       updateTemplate({
-                        totalSeconds: Math.max(
-                          60,
-                          Number(event.target.value) || 60,
-                        ),
+                        moduleTimeoutMode: event.target.value as
+                          | "warn"
+                          | "auto_advance",
                       })
                     }
-                  />
+                  >
+                    <option value="warn">仅提示，不自动结束</option>
+                    <option value="auto_advance">
+                      超出建议时长 50% 后自动进入下一题
+                    </option>
+                  </select>
+                  <small>
+                    此设置作用于本流程所有模块；整场总时长始终为硬上限。
+                  </small>
                 </label>
               </div>
               <label>
@@ -456,16 +487,15 @@ export default function SimulationConfig() {
                         建议时长（秒）
                         <input
                           type="number"
-                          min="30"
-                          value={item.timeSeconds || 120}
-                          onChange={(event) =>
+                          step="1"
+                          value={item.timeSeconds ?? ""}
+                          onChange={(event) => {
+                            const value = event.target.value;
                             updateModule(index, {
-                              timeSeconds: Math.max(
-                                30,
-                                Number(event.target.value) || 30,
-                              ),
-                            })
-                          }
+                              timeSeconds:
+                                value === "" ? undefined : Number(value),
+                            });
+                          }}
                         />
                       </label>
                       <label className="module-followup">

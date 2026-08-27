@@ -169,6 +169,7 @@ const schema = [
     description VARCHAR(500) NULL,
     modules JSON NOT NULL,
     total_seconds INT UNSIGNED NOT NULL DEFAULT 1800,
+    module_timeout_mode VARCHAR(20) NOT NULL DEFAULT 'warn',
     followup_prompt LONGTEXT NULL,
     is_active TINYINT(1) NOT NULL DEFAULT 1,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -346,12 +347,18 @@ async function ensureAiColumns(db: Pool) {
     if (!(await hasColumn(db, table, column))) await db.query('ALTER TABLE ' + table + ' ADD COLUMN ' + column + ' ' + definition);
   }
 }
+async function ensureSimulationColumns(db: Pool) {
+  if (!(await hasColumn(db, 'simulation_templates', 'module_timeout_mode'))) {
+    await db.query("ALTER TABLE simulation_templates ADD COLUMN module_timeout_mode VARCHAR(20) NOT NULL DEFAULT 'warn' AFTER total_seconds");
+  }
+}
 async function initializeDatabase(db: Pool) {
   for (const statement of schema) await db.query(statement);
   await db.query("ALTER TABLE users MODIFY COLUMN status ENUM('pending', 'active', 'rejected', 'deleted') NOT NULL DEFAULT 'active'");
   await ensureQuestionColumns(db);
   await ensurePracticeRecordColumns(db);
   await ensureAiColumns(db);
+  await ensureSimulationColumns(db);
   if (!(await hasColumn(db, 'user_settings', 'avoid_repeated'))) {
     await db.query('ALTER TABLE user_settings ADD COLUMN avoid_repeated TINYINT(1) NOT NULL DEFAULT 0');
   }
