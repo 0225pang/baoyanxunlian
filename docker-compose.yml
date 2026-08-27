@@ -24,7 +24,6 @@ services:
       - app
       - realtime-asr
     ports:
-      - "18080:80"
       - "80:80"
       - "443:443"
       - "443:443/udp"
@@ -34,6 +33,18 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+
+  # Keep the legacy HTTP IP entry isolated from ACME validation on ports 80/443.
+  caddy-ip:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
+      - realtime-asr
+    ports:
+      - "18080:80"
+    volumes:
+      - ./Caddyfile.ip:/etc/caddy/Caddyfile:ro
 
 volumes:
   caddy_data:

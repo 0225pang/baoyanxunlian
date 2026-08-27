@@ -8,13 +8,6 @@
   }
 }
 
-# Keep the existing public-IP HTTP access, for example:
-# http://103.236.89.20:18080. Do not use a catch-all :80 site here: it would
-# proxy the HTTP-01 ACME challenge before Caddy can answer it.
-http://103.236.89.20 {
-  import app_proxy
-}
-
 # Caddy automatically obtains and renews a trusted Let's Encrypt certificate
 # for SITE_DOMAIN. Change SITE_DOMAIN in .env if another subdomain is desired.
 {$SITE_DOMAIN:baoyan.xiaodaidai.tech} {
