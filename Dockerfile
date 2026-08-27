@@ -9,6 +9,16 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
 
+FROM node:22-bookworm-slim AS realtime
+WORKDIR /app
+ENV NODE_ENV=production
+ENV TZ=Asia/Shanghai
+COPY --from=deps /app/node_modules ./node_modules
+COPY realtime-asr-server.mjs ./
+USER node
+EXPOSE 3001
+CMD ["node", "realtime-asr-server.mjs"]
+
 FROM node:22-bookworm-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production

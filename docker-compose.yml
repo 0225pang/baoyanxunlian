@@ -8,11 +8,21 @@ services:
     expose:
       - "3000"
 
+  realtime-asr:
+    build:
+      context: .
+      target: realtime
+    restart: unless-stopped
+    env_file: .env
+    expose:
+      - "3001"
+
   caddy:
     image: caddy:2.10-alpine
     restart: unless-stopped
     depends_on:
       - app
+      - realtime-asr
     ports:
       - "18080:80"
     volumes:

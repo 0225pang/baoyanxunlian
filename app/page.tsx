@@ -376,10 +376,37 @@ function QuestionPicker({ types, onBack, onPick }: { types: QuestionType[]; onBa
 
 type SimulationStep = { id: string; title: string; kind: 'intro' | 'question'; typeCode?: string; count?: number; timeSeconds?: number; allowFollowup?: boolean; prompt?: string; questionId?: number; question?: string; category?: string; subcategory?: string | null };
 type SimulationTemplate = { id: number; name: string; description: string; totalSeconds: number; modules: SimulationStep[] | string; followupPrompt?: string; isActive?: boolean };
+function downsamplePcm(input: Float32Array, inputRate: number, outputRate = 16000) {
+  if (inputRate === outputRate) {
+    const pcm = new Int16Array(input.length);
+    for (let index = 0; index < input.length; index += 1) pcm[index] = Math.max(-1, Math.min(1, input[index])) * 0x7fff;
+    return pcm;
+  }
+  const ratio = inputRate / outputRate;
+  const length = Math.max(1, Math.round(input.length / ratio));
+  const pcm = new Int16Array(length);
+  for (let index = 0; index < length; index += 1) {
+    const start = Math.floor(index * ratio);
+    const end = Math.min(input.length, Math.floor((index + 1) * ratio));
+    let sum = 0;
+    for (let sample = start; sample < Math.max(start + 1, end); sample += 1) sum += input[sample] || 0;
+    pcm[index] = Math.max(-1, Math.min(1, sum / Math.max(1, end - start))) * 0x7fff;
+  }
+  return pcm;
+}
+
+function readRealtimeSentence(value: unknown) {
+  const data = value as { payload?: { output?: { sentence?: { text?: unknown; begin_time?: unknown; end_time?: unknown; beginTime?: unknown; endTime?: unknown; sentence?: unknown }; text?: unknown } }; output?: { sentence?: { text?: unknown; sentence?: unknown; begin_time?: unknown; end_time?: unknown; beginTime?: unknown; endTime?: unknown }; text?: unknown } };
+  const sentence = data?.payload?.output?.sentence || data?.output?.sentence;
+  const text = typeof sentence?.text === 'string' ? sentence.text : typeof sentence?.sentence === 'string' ? sentence.sentence : typeof data?.payload?.output?.text === 'string' ? data.payload.output.text : typeof data?.output?.text === 'string' ? data.output.text : '';
+  const startMs = Number(sentence?.begin_time ?? sentence?.beginTime ?? 0);
+  const endMs = Number(sentence?.end_time ?? sentence?.endTime ?? startMs);
+  return { text: text.trim(), startMs: Number.isFinite(startMs) ? startMs : 0, endMs: Number.isFinite(endMs) ? endMs : startMs };
+}
 type SimulationAnswerDraft = { moduleIndex: number; moduleTitle: string; questionId?: number; question: string; answer: string; transcript: string; transcriptSegments?: TranscriptSegment[]; elapsedSeconds: number; audio?: Blob; followupQuestion?: string };
 
 function Simulation({ onBack }: { onBack: () => void }) {
-  const [templates, setTemplates] = useState<SimulationTemplate[]>([]); const [templateId, setTemplateId] = useState(''); const [sessionId, setSessionId] = useState(0); const [steps, setSteps] = useState<SimulationStep[]>([]); const [stepIndex, setStepIndex] = useState(0); const [answer, setAnswer] = useState(''); const [recording, setRecording] = useState(false); const [segmentBlob, setSegmentBlob] = useState<Blob | null>(null); const [drafts, setDrafts] = useState<SimulationAnswerDraft[]>([]); const [elapsed, setElapsed] = useState(0); const [stepStartedAt, setStepStartedAt] = useState(0); const [message, setMessage] = useState(''); const [followup, setFollowup] = useState<string | null>(null); const [fullAudio, setFullAudio] = useState<Blob | null>(null); const [autoRecord, setAutoRecord] = useState(true); const [readQuestion, setReadQuestion] = useState(false); const [countdown, setCountdown] = useState<number | null>(null); const [reading, setReading] = useState(false); const recorder = useRef<MediaRecorder | null>(null); const chunks = useRef<Blob[]>([]); const stream = useRef<MediaStream | null>(null); const fullRecorder = useRef<MediaRecorder | null>(null); const fullChunks = useRef<Blob[]>([]); const fullAudioRef = useRef<Blob | null>(null); const finishedRef = useRef(false); const speechRunId = useRef(0); const audioContext = useRef<AudioContext | null>(null);
+  const [templates, setTemplates] = useState<SimulationTemplate[]>([]); const [templateId, setTemplateId] = useState(''); const [sessionId, setSessionId] = useState(0); const [steps, setSteps] = useState<SimulationStep[]>([]); const [stepIndex, setStepIndex] = useState(0); const [answer, setAnswer] = useState(''); const [recording, setRecording] = useState(false); const [segmentBlob, setSegmentBlob] = useState<Blob | null>(null); const [drafts, setDrafts] = useState<SimulationAnswerDraft[]>([]); const [elapsed, setElapsed] = useState(0); const [stepStartedAt, setStepStartedAt] = useState(0); const [message, setMessage] = useState(''); const [followup, setFollowup] = useState<string | null>(null); const [fullAudio, setFullAudio] = useState<Blob | null>(null); const [autoRecord, setAutoRecord] = useState(true); const [readQuestion, setReadQuestion] = useState(false); const [countdown, setCountdown] = useState<number | null>(null); const [reading, setReading] = useState(false); const recorder = useRef<MediaRecorder | null>(null); const chunks = useRef<Blob[]>([]); const stream = useRef<MediaStream | null>(null); const fullRecorder = useRef<MediaRecorder | null>(null); const fullChunks = useRef<Blob[]>([]); const fullAudioRef = useRef<Blob | null>(null); const finishedRef = useRef(false); const speechRunId = useRef(0); const audioContext = useRef<AudioContext | null>(null); const [liveTranscript, setLiveTranscript] = useState(''); const [realtimeStatus, setRealtimeStatus] = useState(''); const realtimeSocket = useRef<WebSocket | null>(null); const realtimeAudioContext = useRef<AudioContext | null>(null); const realtimeSource = useRef<MediaStreamAudioSourceNode | null>(null); const realtimeProcessor = useRef<ScriptProcessorNode | null>(null); const realtimeMute = useRef<GainNode | null>(null); const realtimeRun = useRef(0); const liveTranscriptRef = useRef(''); const liveSegmentsRef = useRef<TranscriptSegment[]>([]);
   const playCue = useCallback((kind: 'countdown' | 'recording', value = 0) => {
     try {
       const AudioContextCtor = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -394,14 +421,15 @@ function Simulation({ onBack }: { onBack: () => void }) {
   useEffect(() => { jsonFetch('/api/simulations').then((data) => { setTemplates(data.templates || []); if (data.templates?.[0]) setTemplateId(String(data.templates[0].id)); }).catch((error) => setMessage((error as Error).message)); }, []);
   useEffect(() => { jsonFetch('/api/settings').then((data) => { setAutoRecord(Boolean(data.settings?.autoRecord)); setReadQuestion(Boolean(data.settings?.readQuestion)); }).catch(() => undefined); }, []);
   useEffect(() => { if (!sessionId) return; const timer = window.setInterval(() => setElapsed((value) => value + 1), 1000); return () => window.clearInterval(timer); }, [sessionId]);
-  useEffect(() => () => { speechRunId.current += 1; window.speechSynthesis?.cancel(); if (recorder.current?.state === 'recording') recorder.current.stop(); if (fullRecorder.current?.state === 'recording') fullRecorder.current.stop(); stream.current?.getTracks().forEach((track) => track.stop()); }, []);
+  useEffect(() => () => { speechRunId.current += 1; window.speechSynthesis?.cancel(); if (recorder.current?.state === 'recording') recorder.current.stop(); if (fullRecorder.current?.state === 'recording') fullRecorder.current.stop(); stream.current?.getTracks().forEach((track) => track.stop()); stopRealtimeTranscription(true); }, []);
   const current = steps[stepIndex]; const totalSeconds = templates.find((item) => item.id === Number(templateId))?.totalSeconds || 0; const stepElapsed = stepStartedAt ? Math.max(0, Math.floor((Date.now() - stepStartedAt) / 1000)) : 0;
   const format = (seconds: number) => String(Math.floor(Math.max(0, seconds) / 60)).padStart(2, '0') + ':' + String(Math.max(0, seconds) % 60).padStart(2, '0');
   useEffect(() => {
     if (!sessionId || !totalSeconds || elapsed < totalSeconds || finishedRef.current) return;
     finishedRef.current = true;
     if (recorder.current?.state === 'recording') recorder.current.stop();
-    const timeoutDrafts = current && (answer.trim() || segmentBlob) ? [...drafts, { moduleIndex: stepIndex, moduleTitle: followup ? current.title + ' · 老师追问' : current.title, questionId: current.questionId, question: followup || current.question || current.prompt || '', answer, transcript: answer, elapsedSeconds: Math.max(0, Math.floor((Date.now() - stepStartedAt) / 1000)), audio: segmentBlob || undefined, followupQuestion: followup || undefined }] : drafts;
+    const timeoutTranscript = liveTranscriptRef.current || answer;
+    const timeoutDrafts = current && (timeoutTranscript.trim() || segmentBlob) ? [...drafts, { moduleIndex: stepIndex, moduleTitle: followup ? current.title + ' · 老师追问' : current.title, questionId: current.questionId, question: followup || current.question || current.prompt || '', answer, transcript: timeoutTranscript, transcriptSegments: liveSegmentsRef.current.length ? [...liveSegmentsRef.current] : undefined, elapsedSeconds: Math.max(0, Math.floor((Date.now() - stepStartedAt) / 1000)), audio: segmentBlob || undefined, followupQuestion: followup || undefined }] : drafts;
     setMessage('总时长已到，系统正在自动保存本场模拟。');
     void finish(timeoutDrafts);
   }, [elapsed, totalSeconds, sessionId, current, answer, segmentBlob, drafts, stepIndex, followup, stepStartedAt]);
@@ -415,8 +443,84 @@ function Simulation({ onBack }: { onBack: () => void }) {
       fullRecorder.current = value; value.start(1000);
     } catch { setMessage('完整录音未开启：请允许浏览器使用麦克风。仍可继续用文字完成模拟。'); }
   }
+  function stopRealtimeTranscription(dispose = false) {
+    if (dispose) realtimeRun.current += 1;
+    const processor = realtimeProcessor.current; const source = realtimeSource.current; const mute = realtimeMute.current;
+    realtimeProcessor.current = null; realtimeSource.current = null; realtimeMute.current = null;
+    try { processor?.disconnect(); source?.disconnect(); mute?.disconnect(); } catch { /* disconnected */ }
+    const context = realtimeAudioContext.current; realtimeAudioContext.current = null;
+    if (context) void context.close().catch(() => undefined);
+    const socket = realtimeSocket.current;
+    if (socket?.readyState === WebSocket.OPEN && !dispose) {
+      try { socket.send(JSON.stringify({ action: 'finish' })); } catch { /* closed */ }
+      setRealtimeStatus('正在完成实时转写…');
+    }
+    if (dispose && socket && socket.readyState < WebSocket.CLOSING) {
+      try { socket.close(); } catch { /* closed */ }
+      realtimeSocket.current = null;
+    }
+  }
+
+  function applyRealtimeSentence(payload: unknown, run: number) {
+    if (realtimeRun.current !== run) return;
+    const sentence = readRealtimeSentence(payload);
+    if (!sentence.text) return;
+    const startMs = sentence.startMs || Math.max(0, liveSegmentsRef.current.at(-1)?.endMs || 0);
+    const endMs = Math.max(startMs, sentence.endMs || startMs);
+    const next = [...liveSegmentsRef.current];
+    const existing = next.findIndex((item) => item.startMs === startMs);
+    if (existing >= 0) next[existing] = { startMs, endMs, text: sentence.text };
+    else if (!next.some((item) => item.text === sentence.text && Math.abs(item.startMs - startMs) < 250)) next.push({ startMs, endMs, text: sentence.text });
+    next.sort((left, right) => left.startMs - right.startMs || left.endMs - right.endMs);
+    liveSegmentsRef.current = next;
+    const transcript = next.map((item) => item.text).join('');
+    liveTranscriptRef.current = transcript;
+    setLiveTranscript(transcript);
+    setRealtimeStatus('实时转写中');
+  }
+
+  async function startRealtimeTranscription(media: MediaStream) {
+    stopRealtimeTranscription(true);
+    liveTranscriptRef.current = ''; liveSegmentsRef.current = []; setLiveTranscript('');
+    const run = realtimeRun.current;
+    try {
+      const access = await jsonFetch('/api/realtime-asr/token', { method: 'POST' });
+      if (realtimeRun.current !== run) return;
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const socket = new WebSocket(`${protocol}//${window.location.host}/ws/realtime-asr`);
+      socket.binaryType = 'arraybuffer'; realtimeSocket.current = socket;
+      socket.onopen = () => {
+        if (realtimeRun.current !== run) return;
+        socket.send(JSON.stringify({ action: 'start', token: access.token, taskId: crypto.randomUUID(), sampleRate: 16000 }));
+        setRealtimeStatus('正在连接实时转写…');
+      };
+      socket.onmessage = (event) => {
+        if (realtimeRun.current !== run) return;
+        try {
+          const message = JSON.parse(String(event.data));
+          if (message.type === 'ready') { setRealtimeStatus('实时转写中'); return; }
+          if (message.type === 'result') applyRealtimeSentence(message.data, run);
+          if (message.type === 'error') setRealtimeStatus(`实时转写不可用：${message.error}`);
+          if (message.type === 'closed' && !liveTranscriptRef.current) setRealtimeStatus('实时转写已结束');
+        } catch { /* ignore malformed upstream payload */ }
+      };
+      socket.onerror = () => { if (realtimeRun.current === run) setRealtimeStatus('实时转写连接失败，录音仍会正常保存'); };
+      const AudioContextCtor = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AudioContextCtor) { setRealtimeStatus('当前浏览器不支持实时转写'); return; }
+      const context = new AudioContextCtor(); realtimeAudioContext.current = context;
+      const source = context.createMediaStreamSource(media); const processor = context.createScriptProcessor(4096, 1, 1); const mute = context.createGain(); mute.gain.value = 0;
+      realtimeSource.current = source; realtimeProcessor.current = processor; realtimeMute.current = mute;
+      processor.onaudioprocess = (event) => {
+        if (realtimeRun.current !== run || socket.readyState !== WebSocket.OPEN) return;
+        const pcm = downsamplePcm(event.inputBuffer.getChannelData(0), context.sampleRate);
+        socket.send(pcm.buffer);
+      };
+      source.connect(processor); processor.connect(mute); mute.connect(context.destination);
+      await context.resume();
+    } catch { setRealtimeStatus('实时转写启动失败，录音仍会正常保存'); }
+  }
   async function start(startTemplateId = templateId) { try { const data = await jsonFetch('/api/simulations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ templateId: Number(startTemplateId) }) }); setSessionId(data.sessionId); setSteps(data.steps); setStepIndex(0); setStepStartedAt(Date.now()); setElapsed(0); setDrafts([]); setAnswer(''); setFollowup(null); setSegmentBlob(null); setFullAudio(null); fullAudioRef.current = null; finishedRef.current = false; setReading(false); setCountdown(3); await startFullRecording(); } catch (error) { setMessage((error as Error).message); } }
-  async function startRecording() { try { const media = stream.current || await navigator.mediaDevices.getUserMedia({ audio: true }); stream.current = media; chunks.current = []; const value = new MediaRecorder(media); value.ondataavailable = (event) => { if (event.data.size) chunks.current.push(event.data); }; value.onstop = () => { const blob = new Blob(chunks.current, { type: value.mimeType || 'audio/webm' }); setSegmentBlob(blob); setRecording(false); }; recorder.current = value; value.start(); setRecording(true); } catch { setMessage('无法使用麦克风，请先允许浏览器录音权限。'); } }
+  async function startRecording() { try { const media = stream.current || await navigator.mediaDevices.getUserMedia({ audio: true }); stream.current = media; chunks.current = []; const value = new MediaRecorder(media); value.ondataavailable = (event) => { if (event.data.size) chunks.current.push(event.data); }; value.onstop = () => { const blob = new Blob(chunks.current, { type: value.mimeType || 'audio/webm' }); setSegmentBlob(blob); setRecording(false); }; recorder.current = value; value.start(); setRecording(true); void startRealtimeTranscription(media); } catch { setMessage('无法使用麦克风，请先允许浏览器录音权限。'); } }
   const startRecordingWithCue = useCallback(async () => { playCue('recording'); await startRecording(); }, [playCue]);
   const countdownStepRef = useRef(-1);
   useEffect(() => {
@@ -442,17 +546,17 @@ function Simulation({ onBack }: { onBack: () => void }) {
     }, 1000);
     return () => window.clearTimeout(timer);
   }, [sessionId, countdown, current, readQuestion, autoRecord, playCue, startRecordingWithCue]);
-  function stopRecording() { if (recorder.current?.state === 'recording') recorder.current.stop(); }
+  function stopRecording() { if (recorder.current?.state === 'recording') recorder.current.stop(); stopRealtimeTranscription(); }
   async function stopFullRecording() { const value = fullRecorder.current; if (!value || value.state !== 'recording') return fullAudioRef.current; return new Promise<Blob | null>((resolve) => { value.addEventListener('stop', () => resolve(fullAudioRef.current), { once: true }); value.stop(); }); }
   async function generateFollowup(sourceAnswer = answer, primaryAlreadySaved = false) { if (!current || !sourceAnswer.trim()) return; if (!primaryAlreadySaved) { saveCurrent(current.title, current.question || current.prompt || ''); } try { const data = await jsonFetch('/api/simulations/' + sessionId + '/followup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question: current.question || current.prompt, answer: sourceAnswer, moduleTitle: current.title }) }); setFollowup(data.followup); } catch (error) { setMessage((error as Error).message); } }
-  function saveCurrent(title = current?.title || '', question = followup || current?.question || current?.prompt || '', followupQuestion?: string) { if (!current) return null; const draft = { moduleIndex: stepIndex, moduleTitle: followup ? current.title + ' · 老师追问' : title, questionId: current.questionId, question, answer, transcript: answer, elapsedSeconds: Math.max(0, Math.floor((Date.now() - stepStartedAt) / 1000)), audio: segmentBlob || undefined, followupQuestion }; setDrafts((items) => [...items, draft]); setAnswer(''); setSegmentBlob(null); setFollowup(null); return draft; }
-  async function beginFollowup() { const sourceAnswer = answer; saveCurrent(current?.title || '', current?.question || current?.prompt || ''); await generateFollowup(sourceAnswer, true); }
-  async function next() { if (recording) { setMessage('请先结束本段录音，再进入下一环节。'); return; } if (current?.allowFollowup && answer.trim() && !followup) { await beginFollowup(); return; } const saved = saveCurrent(); if (stepIndex + 1 < steps.length) { setStepIndex((value) => value + 1); setStepStartedAt(Date.now()); } else await finish(saved ? [...drafts, saved] : drafts); }
+  function saveCurrent(title = current?.title || '', question = followup || current?.question || current?.prompt || '', followupQuestion?: string) { if (!current) return null; const transcript = liveTranscriptRef.current || answer; const draft = { moduleIndex: stepIndex, moduleTitle: followup ? current.title + ' · 老师追问' : title, questionId: current.questionId, question, answer, transcript, transcriptSegments: liveSegmentsRef.current.length ? [...liveSegmentsRef.current] : undefined, elapsedSeconds: Math.max(0, Math.floor((Date.now() - stepStartedAt) / 1000)), audio: segmentBlob || undefined, followupQuestion }; setDrafts((items) => [...items, draft]); setAnswer(''); setSegmentBlob(null); setFollowup(null); stopRealtimeTranscription(true); liveTranscriptRef.current = ''; liveSegmentsRef.current = []; setLiveTranscript(''); setRealtimeStatus(''); return draft; }
+  async function beginFollowup() { const sourceAnswer = liveTranscriptRef.current || answer; saveCurrent(current?.title || '', current?.question || current?.prompt || ''); await generateFollowup(sourceAnswer, true); }
+  async function next() { if (recording) { setMessage('请先结束本段录音，再进入下一环节。'); return; } if (current?.allowFollowup && (liveTranscript.trim() || answer.trim()) && !followup) { await beginFollowup(); return; } const saved = saveCurrent(); if (stepIndex + 1 < steps.length) { setStepIndex((value) => value + 1); setStepStartedAt(Date.now()); } else await finish(saved ? [...drafts, saved] : drafts); }
   async function finish(finalDrafts = drafts) { if (!sessionId) return; try { const form = new FormData(); form.set('elapsedSeconds', String(elapsed)); form.set('transcript', finalDrafts.map((item) => item.transcript).filter(Boolean).join('\n')); form.set('answers', JSON.stringify(finalDrafts)); finalDrafts.forEach((item, index) => { if (item.audio) form.set('audio-' + index, new File([item.audio], 'segment-' + index + '.webm', { type: item.audio.type || 'audio/webm' })); }); const whole = await stopFullRecording() || fullAudio || fullAudioRef.current; if (whole) form.set('fullAudio', new File([whole], 'simulation.webm', { type: whole.type || 'audio/webm' })); await jsonFetch('/api/simulations/' + sessionId, { method: 'POST', body: form }); stream.current?.getTracks().forEach((track) => track.stop()); setMessage('完整模拟已保存。'); onBack(); } catch (error) { setMessage((error as Error).message); } }
   if (!sessionId) return <SimulationLobby templates={templates} templateId={templateId} onSelect={setTemplateId} onStart={(id) => { setTemplateId(String(id)); void start(String(id)); }} onBack={onBack} format={format} />;
   if (!current) return null;
   const prompt = followup || current.question || current.prompt || '请开始作答。';
-  return <main className="simulation-page running"><div className="simulation-running-head"><button className="back" onClick={onBack}>退出模拟</button><div><span>全程倒计时</span><strong>{format(totalSeconds - elapsed)}</strong></div><div><span>本环节建议时长</span><strong className={stepElapsed > (current.timeSeconds || 0) ? 'overtime' : ''}>{format(current.timeSeconds || 0)}</strong></div></div><ol className="simulation-puzzle">{steps.map((item, index) => <li className={index === stepIndex ? 'active' : index < stepIndex ? 'done' : ''} key={item.id}><b>{String(index + 1).padStart(2, '0')}</b><span>{item.title}</span></li>)}</ol><section className="simulation-question"><span className="section-kicker">{followup ? 'TEACHER FOLLOW-UP' : current.title}</span><h1>{prompt}</h1>{current.subcategory && <small>{current.subcategory}</small>}<p>{followup ? '这是基于刚才回答生成的老师追问，请继续作答。' : '本环节超过建议时长只会提醒；全程时间到后应结束模拟。'}</p></section><section className="simulation-answer"><textarea value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="可选：记录回答提纲；录音和实时文字稿将保存到本场模拟。" /><div className="recorder"><span><b>{recording ? '正在分段录音' : segmentBlob ? '本段录音已完成' : '准备录制本段回答'}</b><small>当前模块：{current.title}</small></span><button onClick={() => recording ? stopRecording() : void startRecording()}>{recording ? '结束本段录音' : '开始本段录音'}</button></div>{current.allowFollowup && !followup && <button className="secondary-action" disabled={!answer.trim()} onClick={() => void beginFollowup()}>生成老师追问</button>}</section><div className="simulation-actions"><button onClick={() => void next()}>{followup ? '完成追问并进入下一环节' : stepIndex + 1 === steps.length ? '完成模拟并保存' : '保存本段并进入下一环节'}</button></div></main>;
+  return <main className="simulation-page running"><div className="simulation-running-head"><button className="back" onClick={onBack}>退出模拟</button><div><span>全程倒计时</span><strong>{format(totalSeconds - elapsed)}</strong></div><div><span>本环节建议时长</span><strong className={stepElapsed > (current.timeSeconds || 0) ? 'overtime' : ''}>{format(current.timeSeconds || 0)}</strong></div></div><ol className="simulation-puzzle">{steps.map((item, index) => <li className={index === stepIndex ? 'active' : index < stepIndex ? 'done' : ''} key={item.id}><b>{String(index + 1).padStart(2, '0')}</b><span>{item.title}</span></li>)}</ol><section className="simulation-question"><span className="section-kicker">{followup ? 'TEACHER FOLLOW-UP' : current.title}</span><h1>{prompt}</h1>{current.subcategory && <small>{current.subcategory}</small>}<p>{followup ? '这是基于刚才回答生成的老师追问，请继续作答。' : '本环节超过建议时长只会提醒；全程时间到后应结束模拟。'}</p></section><section className="simulation-answer"><textarea value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="可选：记录回答提纲；录音和实时文字稿将保存到本场模拟。" />{realtimeStatus && <div className="realtime-status">{realtimeStatus}</div>}{liveTranscript && <div className="live-transcript"><small>实时识别稿</small><p>{liveTranscript}</p></div>}<div className="recorder"><span><b>{recording ? '正在分段录音' : segmentBlob ? '本段录音已完成' : '准备录制本段回答'}</b><small>当前模块：{current.title}</small></span><button onClick={() => recording ? stopRecording() : void startRecording()}>{recording ? '结束本段录音' : '开始本段录音'}</button></div>{current.allowFollowup && !followup && <button className="secondary-action" disabled={!(liveTranscript.trim() || answer.trim())} onClick={() => void beginFollowup()}>生成老师追问</button>}</section><div className="simulation-actions"><button onClick={() => void next()}>{followup ? '完成追问并进入下一环节' : stepIndex + 1 === steps.length ? '完成模拟并保存' : '保存本段并进入下一环节'}</button></div></main>;
 }
 
 

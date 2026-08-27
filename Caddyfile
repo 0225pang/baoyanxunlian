@@ -1,5 +1,7 @@
 :80 {
   encode zstd gzip
+  @realtime path /ws/realtime-asr
+  reverse_proxy @realtime realtime-asr:3001
   reverse_proxy app:3000
   request_body {
     max_size 55MB
