@@ -10,7 +10,7 @@
 - 可在个人设置中配置倒计时结束后自动录音，倒计时和录音开始带提示音
 - 作答记录持久化，支持类别筛选、关键词搜索和录音回放
 - MySQL 初始化只在对应表不存在或表为空时写入默认数据，已有内容不会覆盖
-- Docker Compose + Caddy HTTP 反向代理（无域名时使用服务器 IP:18080）
+- Docker Compose + Caddy 反向代理（保留服务器 IP:18080 的 HTTP 入口；配置域名后自动提供 HTTPS）
 - 作答详情支持调用阿里云百炼 Paraformer-v1 异步生成带时间戳的录音文字稿
 - 独立 AI 复盘页：使用最近最多 3 次回答生成评估，并支持围绕同一学员、同一道题持续对话；模型返回的 Markdown 会在页面中格式化展示
 - 管理后台统一管理用户、题库、模型配置和提示词；模型平台、模型名称、接口地址和 API Key 均可保存为多个配置并切换
@@ -82,11 +82,13 @@ npm run reset-password -- user 新密码
 
 ## 阿里云部署
 
-1. 使用 `http://服务器公网IP:18080` 访问网站（当前为 HTTP）。
-2. 安全组开放 22、18080 端口，不开放 3306。
-3. 安装 Docker 和 Docker Compose。
-4. 复制 `.env.example` 为 `.env`，填写 MySQL 凭据。当前使用 IP + HTTP，`COOKIE_SECURE` 保持为 `false`。服务器上的应用容器不要填写本地 `33060`；应使用数据库所在服务器的内网地址和 3306，或配置 Docker 到宿主机 MySQL 的内部网络连接。
-5. 启动：
+1. 保留 `http://服务器公网IP:18080` 作为 HTTP 临时入口。
+2. 若已为域名添加 A 记录并开放安全组的 TCP `80`、`443`，在 `.env` 设置 `SITE_DOMAIN=baoyan.xiaodaidai.tech`（或实际使用的子域名）。启动后 Caddy 会自动申请并续期 Let's Encrypt HTTPS 证书，使用 `https://该域名` 访问。
+3. 同时使用 HTTP IP 入口和 HTTPS 域名时，`COOKIE_SECURE` 保持为 `false`，以免 HTTP 登录 Cookie 无法回传；正式仅保留 HTTPS 时可改为 `true`。
+4. 安全组开放 22、18080、80、443 端口，不开放 3306。
+5. 安装 Docker 和 Docker Compose。
+6. 复制 `.env.example` 为 `.env`，填写 MySQL 凭据。服务器上的应用容器不要填写本地 `33060`；应使用数据库所在服务器的内网地址和 3306，或配置 Docker 到宿主机 MySQL 的内部网络连接。
+7. 启动：
 
 ```bash
 docker compose -p baoyanxunlian up -d --build --force-recreate

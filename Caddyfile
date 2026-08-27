@@ -1,4 +1,4 @@
-:80 {
+(app_proxy) {
   encode zstd gzip
   @realtime path /ws/realtime-asr
   reverse_proxy @realtime realtime-asr:3001
@@ -6,4 +6,16 @@
   request_body {
     max_size 55MB
   }
+}
+
+# Keep the existing public-IP HTTP access, for example:
+# http://103.236.89.20:18080
+:80 {
+  import app_proxy
+}
+
+# Caddy automatically obtains and renews a trusted Let's Encrypt certificate
+# for SITE_DOMAIN. Change SITE_DOMAIN in .env if another subdomain is desired.
+{$SITE_DOMAIN:baoyan.xiaodaidai.tech} {
+  import app_proxy
 }
