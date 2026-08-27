@@ -16,7 +16,7 @@ type QuestionType = { id: number; code: string; name: string; description: strin
 type BankQuestion = { id: number; typeId: number; typeName: string; content: string; answer: string | null; subcategory: string | null; status: string; extra?: unknown };
 type TranscriptSegment = { startMs: number; endMs: number; text: string };
 type RecordItem = { id: number; userId: number; questionId: number | null; typeId?: number | null; category: Category; question: string; answer: string; subcategory?: string | null; referenceAnswer?: string | null; hasReferenceAnswer?: number; hasAudio: number; transcript?: string | null; transcriptSegments?: TranscriptSegment[] | string | null; transcriptStatus?: string; transcriptError?: string | null; transcribedAt?: string | null; createdAt: string; username?: string; displayName?: string };
-type RecordGroup = { key: string; userId: number; questionId: number | null; category: Category; question: string; username?: string; attempts: RecordItem[] };
+type RecordGroup = { key: string; userId: number; questionId: number | null; category: Category; question: string; username?: string; displayName?: string; attempts: RecordItem[] };
 type Page = 'home' | 'answer' | 'history' | 'settings' | 'management' | 'review' | 'picker' | 'simulation' | 'simulation-history';
 
 type HomeCard = QuestionType & { no: string; en: string; desc: string; icon: string; color: string };
@@ -63,6 +63,12 @@ function formatTranscriptTime(milliseconds: number) {
   if (seconds < 60) return seconds.toFixed(1) + 's';
   const minutes = Math.floor(seconds / 60);
   return String(minutes).padStart(2, '0') + ':' + (seconds % 60).toFixed(1).padStart(4, '0');
+}
+
+function learnerLabel(displayName?: string | null, username?: string | null) {
+  const name = String(displayName || '').trim(); const account = String(username || '').trim();
+  if (!name) return account;
+  return account && account !== name ? `${name}（${account}）` : name;
 }
 
 function AudioWithDuration({ src, className = '' }: { src: string; className?: string }) {
@@ -151,7 +157,7 @@ export default function Home() {
         current.questionId ? item.questionId === current.questionId : item.question === current.question
       ));
       if (!attempts.length) return current;
-      return { ...current, category: attempts[0].category, question: attempts[0].question, username: attempts[0].username, attempts };
+      return { ...current, category: attempts[0].category, question: attempts[0].question, username: attempts[0].username, displayName: attempts[0].displayName, attempts };
     });
   }, [loadRecords]);
 
@@ -660,7 +666,7 @@ function History({ records, cards, autoTranscribe, onFilter, onNew, onContinue, 
     const key = String(item.userId) + ':' + (item.questionId || 'record-' + item.id);
     let group = groups.find((candidate) => candidate.key === key);
     if (!group) {
-      group = { key, userId: item.userId, questionId: item.questionId, category: item.category, question: item.question, username: item.username, attempts: [] };
+      group = { key, userId: item.userId, questionId: item.questionId, category: item.category, question: item.question, username: item.username, displayName: item.displayName, attempts: [] };
       groups.push(group);
     }
     group.attempts.push(item);
@@ -705,10 +711,10 @@ function History({ records, cards, autoTranscribe, onFilter, onNew, onContinue, 
     {message && <div className="management-message">{message}</div>}
     <section className="records">{visibleGroups.length ? visibleGroups.map((group, index) => {
       const latest = group.attempts[0];
-      return <article className="record-group" key={group.key}><b>{String((page - 1) * pageSize + index + 1).padStart(2, '0')}</b><div className="record-group-main"><small>{group.username ? '学员：' + group.username + ' · ' : ''}{group.category} · {group.attempts.length} 次作答</small><h3>{group.question}</h3><p className="record-latest">{formatRecordDate(latest.createdAt)} · {latest.hasAudio ? '含录音' : '无录音'} · {latest.referenceAnswer ? '有参考答案' : '暂无参考答案'}</p><div className="record-group-actions"><button className="record-open" onClick={() => onReview(group)}>查看复盘 <span>→</span></button>{latest.questionId && latest.typeId && <button className="record-continue" onClick={() => onContinue(latest)}>继续作答</button>}</div></div></article>;
+      return <article className="record-group" key={group.key}><b>{String((page - 1) * pageSize + index + 1).padStart(2, '0')}</b><div className="record-group-main"><small>{group.username || group.displayName ? '学员：' + learnerLabel(group.displayName, group.username) + ' · ' : ''}{group.category} · {group.attempts.length} 次作答</small><h3>{group.question}</h3><p className="record-latest">{formatRecordDate(latest.createdAt)} · {latest.hasAudio ? '含录音' : '无录音'} · {latest.referenceAnswer ? '有参考答案' : '暂无参考答案'}</p><div className="record-group-actions"><button className="record-open" onClick={() => onReview(group)}>查看复盘 <span>→</span></button>{latest.questionId && latest.typeId && <button className="record-continue" onClick={() => onContinue(latest)}>继续作答</button>}</div></div></article>;
     }) : <div className="empty"><b>复</b><h3>还没有作答记录</h3><p>完成一次练习后，录音、答案和复盘信息会出现在这里。</p></div>}</section>
     <div className="pagination"><button disabled={page <= 1} onClick={() => setPage(page - 1)}>← 上一页</button><span>第 {page} / {totalPages} 页</span><button disabled={page >= totalPages} onClick={() => setPage(page + 1)}>下一页 →</button><form className="page-jump" onSubmit={jump}><input type="number" min="1" max={totalPages} value={jumpPage} onChange={(event) => setJumpPage(event.target.value)} /><button>跳转</button></form></div>
-    {selectedGroup && <div className="modal-backdrop record-detail-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedKey(null); }}><section className="record-detail-modal" role="dialog" aria-modal="true" aria-labelledby="record-detail-title"><button type="button" className="modal-close" aria-label="关闭记录详情" onClick={() => setSelectedKey(null)}>×</button><span className="section-kicker">PRACTICE DETAIL</span><small className="record-detail-meta">{selectedGroup.username ? '学员：' + selectedGroup.username + ' · ' : ''}{selectedGroup.category} · {selectedGroup.attempts.length} 次作答</small><h2 id="record-detail-title">{selectedGroup.question}</h2><div className="record-detail-actions"><button className="review-trigger" onClick={() => { onReview(selectedGroup); setSelectedKey(null); }}>进入 AI 复盘</button>{selectedGroup.attempts[0].questionId && selectedGroup.attempts[0].typeId && <button className="modal-submit" onClick={() => { onContinue(selectedGroup.attempts[0]); setSelectedKey(null); }}>继续作答</button>}</div><section className="detail-reference">{selectedGroup.attempts[0].referenceAnswer ? <><span className="section-kicker">REFERENCE ANSWER</span><h3>参考答案</h3><p>{selectedGroup.attempts[0].referenceAnswer}</p></> : <><span className="section-kicker">REFERENCE ANSWER</span><h3>暂无参考答案</h3><p>这道题暂时没有配置参考答案。</p></>}</section><div className="detail-attempts"><h3>每次具体作答</h3>{selectedGroup.attempts.map((item, index) => <article className="detail-attempt" key={item.id}><div className="detail-attempt-head"><strong>第 {selectedGroup.attempts.length - index} 次</strong><small>{formatRecordDate(item.createdAt)}</small></div><p className="detail-answer-label">文字作答</p><p className="detail-answer">{item.answer || '本次未填写文字作答。'}</p>{item.hasAudio ? <TranscriptViewer item={item} onTranscribe={() => void transcribe(item)} onRefresh={async () => { await onFilter(category, search); }} /> : <p className="no-audio">这次作答没有录音。</p>}</article>)}</div><section className="ai-placeholder"><span className="section-kicker">AI REVIEW</span><h3>AI 复盘已经独立成页</h3><p>点击上方“进入 AI 复盘”，可以生成评估、查看历史比较并继续对话。</p></section></section></div>}
+    {selectedGroup && <div className="modal-backdrop record-detail-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedKey(null); }}><section className="record-detail-modal" role="dialog" aria-modal="true" aria-labelledby="record-detail-title"><button type="button" className="modal-close" aria-label="关闭记录详情" onClick={() => setSelectedKey(null)}>×</button><span className="section-kicker">PRACTICE DETAIL</span><small className="record-detail-meta">{selectedGroup.username || selectedGroup.displayName ? '学员：' + learnerLabel(selectedGroup.displayName, selectedGroup.username) + ' · ' : ''}{selectedGroup.category} · {selectedGroup.attempts.length} 次作答</small><h2 id="record-detail-title">{selectedGroup.question}</h2><div className="record-detail-actions"><button className="review-trigger" onClick={() => { onReview(selectedGroup); setSelectedKey(null); }}>进入 AI 复盘</button>{selectedGroup.attempts[0].questionId && selectedGroup.attempts[0].typeId && <button className="modal-submit" onClick={() => { onContinue(selectedGroup.attempts[0]); setSelectedKey(null); }}>继续作答</button>}</div><section className="detail-reference">{selectedGroup.attempts[0].referenceAnswer ? <><span className="section-kicker">REFERENCE ANSWER</span><h3>参考答案</h3><p>{selectedGroup.attempts[0].referenceAnswer}</p></> : <><span className="section-kicker">REFERENCE ANSWER</span><h3>暂无参考答案</h3><p>这道题暂时没有配置参考答案。</p></>}</section><div className="detail-attempts"><h3>每次具体作答</h3>{selectedGroup.attempts.map((item, index) => <article className="detail-attempt" key={item.id}><div className="detail-attempt-head"><strong>第 {selectedGroup.attempts.length - index} 次</strong><small>{formatRecordDate(item.createdAt)}</small></div><p className="detail-answer-label">文字作答</p><p className="detail-answer">{item.answer || '本次未填写文字作答。'}</p>{item.hasAudio ? <TranscriptViewer item={item} onTranscribe={() => void transcribe(item)} onRefresh={async () => { await onFilter(category, search); }} /> : <p className="no-audio">这次作答没有录音。</p>}</article>)}</div><section className="ai-placeholder"><span className="section-kicker">AI REVIEW</span><h3>AI 复盘已经独立成页</h3><p>点击上方“进入 AI 复盘”，可以生成评估、查看历史比较并继续对话。</p></section></section></div>}
   </main>;
 }
 function TranscriptViewer({ item, autoTranscribe = false, onTranscribe, onRefresh }: { item: RecordItem; autoTranscribe?: boolean; onTranscribe: () => void; onRefresh?: () => void | Promise<void> }) {
