@@ -17,5 +17,12 @@
 # Caddy automatically obtains and renews a trusted Let's Encrypt certificate
 # for SITE_DOMAIN. Change SITE_DOMAIN in .env if another subdomain is desired.
 {$SITE_DOMAIN:baoyan.xiaodaidai.tech} {
+  # Some networks reset the special TLS-ALPN validation handshake. Use the
+  # standard HTTP-01 challenge through public TCP port 80 instead.
+  tls {
+    issuer acme {
+      disable_tlsalpn_challenge
+    }
+  }
   import app_proxy
 }
