@@ -1581,7 +1581,9 @@ function Simulation({ onBack }: { onBack: () => void }) {
       }
       setCountdown(null);
       setMessage("");
-      const text = current?.question || current?.prompt || "";
+      // 老师追问生成后，页面上的“当前题目”已经切换为 followup。
+      // 朗读必须使用同一份当前文本，不能继续朗读原始题目。
+      const text = followup || current?.question || current?.prompt || "";
       if (readQuestion && text && "speechSynthesis" in window) {
         const runId = ++speechRunId.current;
         let completed = false;
