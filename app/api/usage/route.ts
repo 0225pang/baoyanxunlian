@@ -22,6 +22,9 @@ function periodWhere(period: string) {
   if (period === 'all') return { condition: '1 = 1', period: 'all' as const };
   return { condition: 'created_at >= DATE_SUB(CURRENT_DATE, INTERVAL 6 DAY)', period: '7d' as const };
 }
+function qualifiedPeriodWhere(period: string, tableAlias: string) {
+  return periodWhere(period).condition.replaceAll('created_at', `${tableAlias}.created_at`);
+}
 function usageMap(rows: UsageRow[]) {
   const map = new Map<number, Record<string, { inputTokens: number; outputTokens: number; audioSeconds: number; requestCount: number }>>();
   for (const row of rows) {
@@ -51,12 +54,13 @@ export async function GET(request: Request) {
       WHERE u.status != 'deleted' ORDER BY u.role DESC, u.id ASC`);
     if (selectedUserId !== null && !users.some((user) => toNumber(user.id) === selectedUserId)) return Response.json({ error: '用户不存在' }, { status: 404 });
 
-    const filter = selectedUserId === null ? '' : ' AND user_id = ?';
+    const filter = selectedUserId === null ? '' : ' AND l.user_id = ?';
     const filterParams = selectedUserId === null ? [] : [selectedUserId];
+    const logPeriodWhere = qualifiedPeriodWhere(range.period, 'l');
     const scopedRows = await query<UsageRow[]>(`SELECT user_id AS userId, feature,
       COALESCE(SUM(input_tokens), 0) AS inputTokens, COALESCE(SUM(output_tokens), 0) AS outputTokens,
       COALESCE(SUM(audio_seconds), 0) AS audioSeconds, COALESCE(SUM(request_count), 0) AS requestCount
-      FROM api_usage_logs WHERE ${range.condition}${filter} GROUP BY user_id, feature`, filterParams);
+      FROM api_usage_logs l WHERE ${logPeriodWhere}${filter} GROUP BY l.user_id, l.feature`, filterParams);
     const scopedUsage = usageMap(scopedRows);
     const totals = scopedRows.reduce((value, row) => ({
       aiTokens: value.aiTokens + (String(row.feature) === 'ai' ? toNumber(row.inputTokens) + toNumber(row.outputTokens) : 0),
@@ -64,11 +68,11 @@ export async function GET(request: Request) {
       realtimeSeconds: value.realtimeSeconds + (String(row.feature) === 'realtime_asr' ? toNumber(row.audioSeconds) : 0),
     }), { aiTokens: 0, asrRequests: 0, realtimeSeconds: 0 });
 
-    const bucket = range.period === '24h' ? "DATE_FORMAT(created_at, '%m-%d %H:00')" : range.period === 'all' ? "DATE_FORMAT(created_at, '%Y-%m')" : "DATE_FORMAT(created_at, '%Y-%m-%d')";
+    const bucket = range.period === '24h' ? "DATE_FORMAT(l.created_at, '%m-%d %H:00')" : range.period === 'all' ? "DATE_FORMAT(l.created_at, '%Y-%m')" : "DATE_FORMAT(l.created_at, '%Y-%m-%d')";
     const dailyRows = await query<RowDataPacket[]>(`SELECT ${bucket} AS bucket, feature,
       COALESCE(SUM(input_tokens + output_tokens), 0) AS tokens, COALESCE(SUM(request_count), 0) AS requests,
       COALESCE(SUM(audio_seconds), 0) AS seconds FROM api_usage_logs
-      WHERE ${range.condition}${filter} GROUP BY bucket, feature ORDER BY bucket ASC`, filterParams);
+      WHERE ${logPeriodWhere}${filter} GROUP BY bucket, l.feature ORDER BY bucket ASC`, filterParams);
     const dailyByBucket = new Map<string, Record<string, { tokens: number; requests: number; seconds: number }>>();
     for (const row of dailyRows) {
       const bucketKey = String(row.bucket); const entry = dailyByBucket.get(bucketKey) || {};
@@ -89,7 +93,7 @@ export async function GET(request: Request) {
 
     const modelRows = await query<RowDataPacket[]>(`SELECT COALESCE(NULLIF(model, ''), '未标注模型') AS model,
       COALESCE(SUM(input_tokens + output_tokens), 0) AS tokens, COALESCE(SUM(request_count), 0) AS requests
-      FROM api_usage_logs WHERE feature = 'ai' AND ${range.condition}${filter}
+      FROM api_usage_logs l WHERE l.feature = 'ai' AND ${logPeriodWhere}${filter}
       GROUP BY model ORDER BY tokens DESC LIMIT 12`, filterParams);
     const modelSeries = modelRows.map((row) => ({ model: String(row.model), tokens: toNumber(row.tokens), requests: toNumber(row.requests) }));
 
@@ -98,7 +102,7 @@ export async function GET(request: Request) {
       COALESCE(SUM(CASE WHEN l.feature = 'asr' THEN l.request_count ELSE 0 END), 0) AS asrRequests,
       COALESCE(SUM(CASE WHEN l.feature = 'realtime_asr' THEN l.audio_seconds ELSE 0 END), 0) AS realtimeSeconds,
       COALESCE(SUM(l.request_count), 0) AS totalRequests
-      FROM users u LEFT JOIN api_usage_logs l ON l.user_id = u.id AND ${range.condition}
+      FROM users u LEFT JOIN api_usage_logs l ON l.user_id = u.id AND ${logPeriodWhere}
       WHERE u.status != 'deleted' GROUP BY u.id, u.username, u.display_name
       ORDER BY aiTokens DESC, totalRequests DESC, u.id ASC LIMIT 20`);
     const leaderboard = leaderboardRows.map((row, index) => ({ rank: index + 1, userId: toNumber(row.userId), username: String(row.username), displayName: String(row.displayName), aiTokens: toNumber(row.aiTokens), asrRequests: toNumber(row.asrRequests), realtimeSeconds: toNumber(row.realtimeSeconds), totalRequests: toNumber(row.totalRequests) }));
@@ -106,7 +110,7 @@ export async function GET(request: Request) {
     const monthlyRows = selectedUserId === null ? [] : await query<UsageRow[]>(`SELECT user_id AS userId, feature,
       COALESCE(SUM(input_tokens), 0) AS inputTokens, COALESCE(SUM(output_tokens), 0) AS outputTokens,
       COALESCE(SUM(audio_seconds), 0) AS audioSeconds, COALESCE(SUM(request_count), 0) AS requestCount
-      FROM api_usage_logs WHERE user_id = ? AND created_at >= DATE_FORMAT(CURRENT_DATE, '%Y-%m-01') GROUP BY user_id, feature`, [selectedUserId]);
+      FROM api_usage_logs l WHERE l.user_id = ? AND l.created_at >= DATE_FORMAT(CURRENT_DATE, '%Y-%m-01') GROUP BY l.user_id, l.feature`, [selectedUserId]);
     const selected = selectedUserId === null ? null : users.find((item) => toNumber(item.id) === selectedUserId) || null;
     const monthlyUsage = usageMap(monthlyRows).get(selectedUserId || 0) || {};
     return Response.json({
