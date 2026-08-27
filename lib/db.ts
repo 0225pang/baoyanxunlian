@@ -8,6 +8,8 @@ const questionTypes = [
   { code: 'professional', name: '专业问题', description: '食品专业笔试、面试和专业课问题', sortOrder: 1 },
   { code: 'english', name: '英语问答问题', description: '英语口语、英文自我介绍和专业英语问答', sortOrder: 2 },
   { code: 'comprehensive', name: '综合面试问题', description: '综合素质、科研规划和压力面试问题', sortOrder: 3 },
+  { code: 'literature_translation', name: '文献英语翻译', description: '食品专业英文文献、术语与段落翻译训练', sortOrder: 4 },
+  { code: 'ideology', name: '思政问题', description: '思想政治理论与时事政策类面试问题', sortOrder: 5 },
 ] as const;
 
 const mockQuestions = [
@@ -17,6 +19,8 @@ const mockQuestions = [
   { code: 'english', content: 'Please describe your research interests in English.', answer: 'You can introduce the research topic, explain why it interests you, and briefly describe the methods or questions you would like to explore.', subcategory: '专业英语' },
   { code: 'comprehensive', content: '为什么选择保研，而不是直接就业或出国深造？', answer: null, subcategory: '报考动机' },
   { code: 'comprehensive', content: '请谈谈你的一次失败经历，以及它带给你的改变。', answer: null, subcategory: '个人经历' },
+  { code: 'literature_translation', content: '请翻译：The Maillard reaction is a complex series of chemical reactions between reducing sugars and amino compounds, which contributes to the color and flavor development of many foods during thermal processing.', answer: '美拉德反应是还原糖与氨基化合物之间发生的一系列复杂化学反应。在热加工过程中，该反应会促进许多食品颜色和风味的形成。', subcategory: '食品化学文献' },
+  { code: 'ideology', content: '请结合食品专业背景，谈谈你如何理解“把论文写在祖国大地上”。', answer: '可从国家粮食安全、食品安全、健康中国等需求切入，说明科研选题应面向真实产业和民生问题，并结合自身学习或科研经历，提出未来能够落地的行动。', subcategory: '专业与国家需求' },
 ] as const;
 
 const schema = [
@@ -378,6 +382,27 @@ async function initializeDatabase(db: Pool) {
     }
   }
   await migrateLegacyQuestions(db);
+
+  // These two categories were added after the first release. They are inserted
+  // only when missing so an existing question bank receives the new choices
+  // without overwriting any administrator-managed type or question.
+  if (!seedQuestionBank) {
+    for (const type of questionTypes.filter((item) => item.code === 'literature_translation' || item.code === 'ideology')) {
+      await db.query(
+        'INSERT IGNORE INTO question_types (code, name, description, settings, sort_order, is_active) VALUES (?, ?, ?, ?, ?, 1)',
+        [type.code, type.name, type.description, JSON.stringify({ countdownSeconds: 3, autoRecord: true, answerReveal: 'after_recording' }), type.sortOrder],
+      );
+    }
+    for (const mock of mockQuestions.filter((item) => item.code === 'literature_translation' || item.code === 'ideology')) {
+      const [questionRows] = await db.query<RowDataPacket[]>('SELECT id FROM questions WHERE content = ? LIMIT 1', [mock.content]);
+      if (questionRows.length) continue;
+      const [typeRows] = await db.query<RowDataPacket[]>('SELECT id FROM question_types WHERE code = ? LIMIT 1', [mock.code]);
+      if (!typeRows[0]) continue;
+      await db.query('INSERT INTO questions (type_id, content, answer, subcategory, extra, status) VALUES (?, ?, ?, ?, ?, ?)', [
+        typeRows[0].id, mock.content, mock.answer, mock.subcategory, JSON.stringify({ source: '系统模拟题' }), 'active',
+      ]);
+    }
+  }
 
   if (seedQuestionBank) {
     for (const mock of mockQuestions) {

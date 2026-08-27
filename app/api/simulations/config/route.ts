@@ -23,7 +23,7 @@ export async function PATCH(request: Request) {
       const item = body.template; const name = String(item.name || '').trim(); const modules = Array.isArray(item.modules) ? item.modules : [];
       const totalSeconds = Math.max(60, Number(item.totalSeconds) || 1800);
       if (!name || !modules.length) return Response.json({ error: '模拟名称和至少一个模块不能为空' }, { status: 400 });
-      if (modules.some((module) => module && typeof module === 'object' && ((module as { kind?: unknown }).kind === 'fixed' || (module as { kind?: unknown }).kind === 'intro') && !String((module as { prompt?: unknown }).prompt || '').trim())) return Response.json({ error: '固定题目或开场任务不能为空，请补充题目内容' }, { status: 400 });
+      if (modules.some((module) => module && typeof module === 'object' && ['fixed', 'intro', 'dynamic'].includes(String((module as { kind?: unknown }).kind || '')) && !String((module as { prompt?: unknown }).prompt || '').trim())) return Response.json({ error: '固定题目、开场任务或动态提问提示词不能为空，请补充内容' }, { status: 400 });
       if (Number(item.id) > 0) await execute('UPDATE simulation_templates SET name = ?, description = ?, modules = ?, total_seconds = ?, followup_prompt = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [name, String(item.description || '').trim() || null, JSON.stringify(modules), totalSeconds, String(item.followupPrompt || '').trim() || null, item.isActive === false ? 0 : 1, Number(item.id)]);
       else await execute('INSERT INTO simulation_templates (name, description, modules, total_seconds, followup_prompt, is_active) VALUES (?, ?, ?, ?, ?, ?)', [name, String(item.description || '').trim() || null, JSON.stringify(modules), totalSeconds, String(item.followupPrompt || '').trim() || null, item.isActive === false ? 0 : 1]);
     }

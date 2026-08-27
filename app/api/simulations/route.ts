@@ -2,7 +2,7 @@ import { apiError, requireUser } from '@/lib/auth';
 import { execute, query } from '@/lib/db';
 import type { RowDataPacket } from 'mysql2/promise';
 
-type Module = { id: string; title: string; kind: 'intro' | 'question' | 'fixed'; typeCode?: string; count?: number; timeSeconds?: number; allowFollowup?: boolean; prompt?: string };
+type Module = { id: string; title: string; kind: 'intro' | 'question' | 'fixed' | 'dynamic'; typeCode?: string; count?: number; timeSeconds?: number; allowFollowup?: boolean; prompt?: string };
 
 export async function GET() {
   try {
@@ -18,7 +18,7 @@ export async function POST(request: Request) {
     const rows = await query<RowDataPacket[]>('SELECT id, name, modules, total_seconds AS totalSeconds FROM simulation_templates WHERE id = ? AND is_active = 1 LIMIT 1', [Number(body.templateId)]);
     const template = rows[0]; if (!template) return Response.json({ error: '模拟模板不存在或未启用' }, { status: 404 });
     const modules = (typeof template.modules === 'string' ? JSON.parse(template.modules) : template.modules) as Module[];
-    const steps: Array<Module & { questionId?: number; question?: string; category?: string; subcategory?: string | null }> = [];
+    const steps: Array<Module & { templateModuleId?: string; questionId?: number; question?: string; category?: string; subcategory?: string | null }> = [];
     for (const module of modules) {
       const count = Math.max(1, Number(module.count) || 1);
       for (let index = 0; index < count; index += 1) {
@@ -26,6 +26,10 @@ export async function POST(request: Request) {
           const prompt = String(module.prompt || '').trim();
           if (!prompt) return Response.json({ error: '固定题目或开场任务缺少题目内容，请在模拟配置中补充' }, { status: 400 });
           steps.push({ ...module, id: module.id + '-' + index, question: prompt, category: module.kind === 'fixed' ? '固定题目' : '开场任务' });
+          continue;
+        }
+        if (module.kind === 'dynamic') {
+          steps.push({ ...module, id: module.id + '-' + index, templateModuleId: module.id, category: 'AI 动态提问' });
           continue;
         }
         const questions = await query<RowDataPacket[]>(`SELECT q.id, q.content, q.answer AS referenceAnswer, q.subcategory, t.name AS category FROM questions q JOIN question_types t ON t.id = q.type_id WHERE q.status = 'active' AND t.code = ? ORDER BY RAND() LIMIT 1`, [module.typeCode || 'professional']);
