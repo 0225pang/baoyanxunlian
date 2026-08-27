@@ -487,14 +487,21 @@ async function initializeDatabase(db: Pool) {
     const modules = [
       { id: 'intro', title: '中文自我介绍', kind: 'intro', count: 1, timeSeconds: 480, allowFollowup: false, prompt: '请进行中文自我介绍，不需要 PPT。' },
       { id: 'ideology', title: '思政抽题', kind: 'question', typeCode: 'comprehensive', count: 1, timeSeconds: 120, allowFollowup: false },
-      { id: 'english', title: '英语问答', kind: 'question', typeCode: 'english', count: 1, timeSeconds: 120, allowFollowup: true },
-      { id: 'professional', title: '专业课抽题', kind: 'question', typeCode: 'professional', count: 1, timeSeconds: 180, allowFollowup: true },
+      { id: 'english', title: '英语问答', kind: 'question', typeCode: 'english', count: 1, timeSeconds: 120, allowFollowup: true, followupCount: 1 },
+      { id: 'professional', title: '专业课抽题', kind: 'question', typeCode: 'professional', count: 1, timeSeconds: 180, allowFollowup: true, followupCount: 2 },
     ];
     await db.query('INSERT INTO simulation_templates (name, description, modules, total_seconds, followup_prompt) VALUES (?, ?, ?, ?, ?)', [
       '中农完整面试模拟', '中文自我介绍 → 思政抽题 → 英语问答 → 专业课抽题 → 老师追问', JSON.stringify(modules), 1800,
-      '你是一名食品专业保研面试老师。请只根据题目与学员刚才的回答，提出一个自然、具体、有区分度的追问。只输出追问问题本身，不要解释。',
+      '你是一名食品专业保研面试老师，正在进行真实面试。请根据原题、学员的全部已作答内容、当前追问轮次和所在模块，只生成一条自然、具体、可继续作答的老师追问。首轮优先核验核心观点、事实依据或表达中的模糊处；后续轮次要么沿同一问题继续深入，要么换一个能补足判断的信息角度。不得重复已问问题，不要评价、提示、编号或解释，只输出追问问题本身。',
     ]);
   }
+  await db.query(
+    'UPDATE simulation_templates SET followup_prompt = ? WHERE followup_prompt = ?',
+    [
+      '你是一名食品专业保研面试老师，正在进行真实面试。请根据原题、学员的全部已作答内容、当前追问轮次和所在模块，只生成一条自然、具体、可继续作答的老师追问。首轮优先核验核心观点、事实依据或表达中的模糊处；后续轮次要么沿同一问题继续深入，要么换一个能补足判断的信息角度。不得重复已问问题，不要评价、提示、编号或解释，只输出追问问题本身。',
+      '你是一名食品专业保研面试老师。请只根据题目与学员刚才的回答，提出一个自然、具体、有区分度的追问。只输出追问问题本身，不要解释。',
+    ],
+  );
   const [realtimeRows] = await db.query<RowDataPacket[]>('SELECT COUNT(*) AS count FROM realtime_asr_settings');
   if (Number(realtimeRows[0].count) === 0) {
     await db.query('INSERT INTO realtime_asr_settings (id, provider, websocket_url, model, api_key) VALUES (1, ?, ?, ?, ?)', [
