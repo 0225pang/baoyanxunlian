@@ -53,7 +53,8 @@ function startPayload(taskId, setting, sampleRate) {
       task: 'asr',
       function: 'recognition',
       model: setting.model,
-      parameters: { format: 'pcm', sample_rate: sampleRate, language_type: 'zh' },
+      parameters: { sample_rate: sampleRate, format: 'pcm' },
+      input: {},
     },
   });
 }
@@ -75,13 +76,20 @@ server.on('connection', (client) => {
   let taskId = '';
   let started = false;
   let finishing = false;
+  let upstreamTaskStarted = false;
   const pendingAudio = [];
-  const closeUpstream = () => {
+  const closeUpstream = (force = false) => {
     if (!upstream) return;
     if (upstream.readyState === WebSocket.OPEN && !finishing && taskId) {
       finishing = true;
       try { upstream.send(finishPayload(taskId)); } catch { /* closing */ }
+      if (!force) {
+        const value = upstream;
+        setTimeout(() => { if (upstream === value && value.readyState === WebSocket.OPEN) { try { value.close(); } catch { /* closing */ } } }, 5000);
+        return;
+      }
     }
+    if (!force) return;
     const value = upstream;
     upstream = null;
     if (value.readyState === WebSocket.CONNECTING || value.readyState === WebSocket.OPEN) {
@@ -91,7 +99,7 @@ server.on('connection', (client) => {
 
   client.on('message', async (raw, isBinary) => {
     if (isBinary) {
-      if (!started || !upstream || upstream.readyState !== WebSocket.OPEN) {
+      if (!started || !upstream || upstream.readyState !== WebSocket.OPEN || !upstreamTaskStarted) {
         if (pendingAudio.length < 40) pendingAudio.push(Buffer.from(raw));
       } else upstream.send(raw, { binary: true });
       return;
@@ -111,14 +119,18 @@ server.on('connection', (client) => {
       upstream.on('open', () => {
         if (!upstream) return;
         upstream.send(startPayload(taskId, setting, sampleRate));
-        for (const audio of pendingAudio.splice(0)) upstream.send(audio, { binary: true });
-        send(client, { type: 'ready' });
       });
       let upstreamFailure = '';
       upstream.on('message', (data) => {
         try {
           const payload = JSON.parse(data.toString());
           const header = payload?.header || {};
+          if (header.event === 'task-started') {
+            upstreamTaskStarted = true;
+            for (const audio of pendingAudio.splice(0)) upstream?.send(audio, { binary: true });
+            send(client, { type: 'ready' });
+            return;
+          }
           if (header.event === 'task-failed' || header.error_code || header.error_message) {
             upstreamFailure = String(header.error_message || payload?.payload?.output?.message || payload?.message || '百炼拒绝了实时转写任务');
             send(client, { type: 'error', error: upstreamFailure, data: payload });
@@ -142,8 +154,8 @@ server.on('connection', (client) => {
       client.close(1011, 'configuration error');
     }
   });
-  client.on('close', closeUpstream);
-  client.on('error', closeUpstream);
+  client.on('close', () => closeUpstream(true));
+  client.on('error', () => closeUpstream(true));
 });
 
 server.on('listening', () => console.log(`Realtime ASR proxy listening on :${PORT}`));
