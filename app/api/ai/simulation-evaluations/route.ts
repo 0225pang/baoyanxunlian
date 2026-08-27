@@ -1,0 +1,66 @@
+import { apiError, requireUser } from '@/lib/auth';
+import { chatCompletionsUrl, extractChatContent, getActiveAiConfig, hashEvaluationInput, safeJsonParse } from '@/lib/ai';
+import { execute, query } from '@/lib/db';
+import { assertApiAccess, logApiUsage, readTokenUsage } from '@/lib/usage';
+import type { RowDataPacket } from 'mysql2/promise';
+
+type Input = { sessionId: number; templateName: string; elapsedSeconds: number; answers: unknown[] };
+
+async function sessionForUser(currentId: number, role: string, sessionId: number) {
+  const rows = await query<RowDataPacket[]>('SELECT id, user_id AS userId, template_name AS templateName, elapsed_seconds AS elapsedSeconds, status FROM simulation_sessions WHERE id = ? LIMIT 1', [sessionId]);
+  const session = rows[0];
+  if (!session || (role !== 'admin' && Number(session.userId) !== currentId)) throw new Error('FORBIDDEN');
+  if (String(session.status) !== 'completed') throw new Error('SIMULATION_NOT_COMPLETE');
+  return session;
+}
+
+async function buildInput(session: RowDataPacket): Promise<Input> {
+  const answers = await query<RowDataPacket[]>(`SELECT module_index AS moduleIndex, module_title AS moduleTitle, question, answer, transcript,
+    transcript_segments AS transcriptSegments, followup_question AS followupQuestion, elapsed_seconds AS elapsedSeconds
+    FROM simulation_answers WHERE session_id = ? ORDER BY module_index ASC, id ASC`, [Number(session.id)]);
+  return { sessionId: Number(session.id), templateName: String(session.templateName || ''), elapsedSeconds: Number(session.elapsedSeconds || 0), answers: answers.map((answer) => ({
+    moduleIndex: Number(answer.moduleIndex), moduleTitle: String(answer.moduleTitle || ''), question: String(answer.question || ''), answer: String(answer.answer || ''), transcript: answer.transcript ? String(answer.transcript) : null,
+    transcriptSegments: answer.transcriptSegments ? (typeof answer.transcriptSegments === 'string' ? safeJsonParse(String(answer.transcriptSegments)) : answer.transcriptSegments) : null,
+    followupQuestion: answer.followupQuestion ? String(answer.followupQuestion) : null, elapsedSeconds: Number(answer.elapsedSeconds || 0),
+  })) };
+}
+
+async function runEvaluation(evaluationId: number, session: RowDataPacket, input: Input, systemPrompt: string, config: NonNullable<Awaited<ReturnType<typeof getActiveAiConfig>>>, prompt: string) {
+  try {
+    await execute('INSERT INTO simulation_messages (session_id, user_id, evaluation_id, role, content) VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)', [Number(session.id), Number(session.userId), evaluationId, 'system', systemPrompt, Number(session.id), Number(session.userId), evaluationId, 'user', prompt]);
+    const response = await fetch(chatCompletionsUrl(config.baseUrl), { method: 'POST', headers: { Authorization: 'Bearer ' + config.apiKey, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: config.model, temperature: 0.3, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }] }) });
+    const raw = await response.text(); const payload = safeJsonParse(raw); if (!response.ok) throw new Error('AI 请求失败 ' + response.status + ': ' + raw.slice(0, 500));
+    const result = extractChatContent(payload); if (!result) throw new Error('AI 返回内容为空');
+    await execute('UPDATE simulation_evaluations SET status = \'completed\', result = ?, error = NULL, completed_at = CURRENT_TIMESTAMP WHERE id = ?', [result, evaluationId]);
+    await execute('INSERT INTO simulation_messages (session_id, user_id, evaluation_id, role, content) VALUES (?, ?, ?, ?, ?)', [Number(session.id), Number(session.userId), evaluationId, 'assistant', result]);
+    const usage = readTokenUsage(payload); await logApiUsage(Number(session.userId), 'ai', { inputTokens: usage.inputTokens || Math.ceil(prompt.length / 2), outputTokens: usage.outputTokens || Math.ceil(result.length / 2), model: config.model });
+  } catch (error) { await execute('UPDATE simulation_evaluations SET status = \'failed\', error = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?', [String(error).slice(0, 2000), evaluationId]).catch(() => undefined); }
+}
+
+export async function GET(request: Request) {
+  try {
+    const current = await requireUser(); const sessionId = Number(new URL(request.url).searchParams.get('sessionId'));
+    if (!Number.isInteger(sessionId) || sessionId <= 0) return Response.json({ error: '模拟场次编号无效' }, { status: 400 });
+    await sessionForUser(current.id, current.role, sessionId);
+    const evaluations = await query('SELECT id, status, result, error, DATE_FORMAT(created_at, \'%Y-%m-%dT%H:%i:%s\') AS createdAt, DATE_FORMAT(completed_at, \'%Y-%m-%dT%H:%i:%s\') AS completedAt FROM simulation_evaluations WHERE session_id = ? ORDER BY id DESC', [sessionId]);
+    const messages = await query('SELECT id, role, content, DATE_FORMAT(created_at, \'%Y-%m-%dT%H:%i:%s\') AS createdAt FROM simulation_messages WHERE session_id = ? AND evaluation_id IS NULL ORDER BY id ASC', [sessionId]);
+    return Response.json({ evaluations, messages });
+  } catch (error) { if (error instanceof Error && error.message === 'SIMULATION_NOT_COMPLETE') return Response.json({ error: '仅完整完成的模拟可以复盘' }, { status: 400 }); return apiError(error); }
+}
+
+export async function POST(request: Request) {
+  try {
+    const current = await requireUser(); const body = await request.json() as { sessionId?: number }; const sessionId = Number(body.sessionId);
+    if (!Number.isInteger(sessionId) || sessionId <= 0) return Response.json({ error: '模拟场次编号无效' }, { status: 400 });
+    const session = await sessionForUser(current.id, current.role, sessionId); const input = await buildInput(session); if (!input.answers.length) return Response.json({ error: '本场模拟没有可评估的回答' }, { status: 400 });
+    const inputHash = hashEvaluationInput(input); const existing = await query<RowDataPacket[]>('SELECT id, status, result, error FROM simulation_evaluations WHERE session_id = ? AND input_hash = ? LIMIT 1', [sessionId, inputHash]);
+    if (existing[0]) return Response.json({ status: existing[0].status, evaluationId: Number(existing[0].id), result: existing[0].result || null, error: existing[0].error || null, reused: true }, { status: existing[0].status === 'processing' ? 202 : 200 });
+    const config = await getActiveAiConfig(); if (!config?.apiKey) return Response.json({ error: 'AI 尚未配置 API Key' }, { status: 503 }); await assertApiAccess(Number(session.userId), 'ai');
+    const previousRows = await query<RowDataPacket[]>('SELECT result FROM simulation_evaluations WHERE session_id = ? AND status = \'completed\' ORDER BY id DESC LIMIT 1', [sessionId]);
+    const previous = previousRows[0]?.result ? '\n\n上一次本场模拟的评估如下，请结合当前数据指出进步或仍需改进之处：\n' + String(previousRows[0].result) : '';
+    const prompt = '请使用既定的食品专业保研面试评估标准，复盘以下完整真实模拟。请重点评价总体结构、专业准确性、表达节奏、每个模块表现、追问应对以及下一步训练建议。若提供了带时间戳的转写切片，请分析思考时长与停顿。请用清晰的 Markdown 输出。\n\n' + JSON.stringify(input, null, 2) + previous;
+    const result = await execute('INSERT INTO simulation_evaluations (session_id, user_id, input_hash, input_snapshot, status) VALUES (?, ?, ?, ?, \'processing\')', [sessionId, Number(session.userId), inputHash, JSON.stringify(input)]);
+    void runEvaluation(Number(result.insertId), session, input, config.systemPrompt, config, prompt);
+    return Response.json({ status: 'processing', evaluationId: Number(result.insertId), message: '模拟复盘已开始生成，请稍候查看' }, { status: 202 });
+  } catch (error) { if (error instanceof Error && error.message === 'SIMULATION_NOT_COMPLETE') return Response.json({ error: '仅完整完成的模拟可以复盘' }, { status: 400 }); return apiError(error); }
+}

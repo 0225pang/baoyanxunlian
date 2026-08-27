@@ -38,7 +38,14 @@ export async function GET() {
       asrRequests: value.asrRequests + (String(row.feature) === 'asr' ? Number(row.requestCount || 0) : 0),
       realtimeSeconds: value.realtimeSeconds + (String(row.feature) === 'realtime_asr' ? Number(row.audioSeconds || 0) : 0),
     }), { aiTokens: 0, asrRequests: 0, realtimeSeconds: 0 });
-    return Response.json({ month: new Date().toISOString().slice(0, 7), totals, users: users.map((user) => ({ ...user, usage: usage.get(Number(user.id)) || {} })) });
+const dailyRows = await query<RowDataPacket[]>(`SELECT DATE_FORMAT(created_at, '%Y-%m-%d') AS day, feature,
+      COALESCE(SUM(input_tokens + output_tokens), 0) AS tokens, COALESCE(SUM(request_count), 0) AS requests,
+      COALESCE(SUM(audio_seconds), 0) AS seconds FROM api_usage_logs
+      WHERE created_at >= DATE_SUB(CURRENT_DATE, INTERVAL 6 DAY) GROUP BY day, feature ORDER BY day ASC`);
+    const dailyByDay = new Map<string, Record<string, { tokens: number; requests: number; seconds: number }>>();
+    for (const row of dailyRows) { const key = String(row.day); const current = dailyByDay.get(key) || {}; current[String(row.feature)] = { tokens: Number(row.tokens || 0), requests: Number(row.requests || 0), seconds: Number(row.seconds || 0) }; dailyByDay.set(key, current); }
+    const daily = Array.from({ length: 7 }, (_value, index) => { const date = new Date(); date.setDate(date.getDate() - (6 - index)); const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`; const item = dailyByDay.get(key) || {}; return { label: key.slice(5).replace('-', '/'), aiTokens: Number(item.ai?.tokens || 0), asrRequests: Number(item.asr?.requests || 0), realtimeSeconds: Number(item.realtime_asr?.seconds || 0) }; });
+    return Response.json({ month: new Date().toISOString().slice(0, 7), totals, daily, users: users.map((user) => ({ ...user, usage: usage.get(Number(user.id)) || {} })) });
   } catch (error) { return apiError(error); }
 }
 

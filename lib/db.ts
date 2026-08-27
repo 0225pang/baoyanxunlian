@@ -207,6 +207,29 @@ const schema = [
     followup_question TEXT NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_simulation_answers_session_module (session_id, module_index)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,  `CREATE TABLE IF NOT EXISTS simulation_evaluations (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    session_id BIGINT UNSIGNED NOT NULL,
+    user_id BIGINT UNSIGNED NOT NULL,
+    input_hash CHAR(64) NOT NULL,
+    input_snapshot LONGTEXT NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'processing',
+    result LONGTEXT NULL,
+    error TEXT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at DATETIME NULL,
+    UNIQUE KEY uq_simulation_evaluation_input (session_id, input_hash),
+    INDEX idx_simulation_evaluations_session_created (session_id, created_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE TABLE IF NOT EXISTS simulation_messages (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    session_id BIGINT UNSIGNED NOT NULL,
+    user_id BIGINT UNSIGNED NOT NULL,
+    evaluation_id BIGINT UNSIGNED NULL,
+    role VARCHAR(20) NOT NULL,
+    content LONGTEXT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_simulation_messages_conversation (session_id, created_at)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,  `CREATE TABLE IF NOT EXISTS user_api_limits (
     user_id BIGINT UNSIGNED NOT NULL PRIMARY KEY,
     ai_enabled TINYINT(1) NOT NULL DEFAULT 1,
