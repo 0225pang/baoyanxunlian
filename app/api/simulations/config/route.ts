@@ -8,7 +8,7 @@ function preview(value: string | null) { const key = String(value || ''); return
 export async function GET() {
   try {
     await admin();
-    const templates = await query('SELECT id, name, description, modules, total_seconds AS totalSeconds, followup_prompt AS followupPrompt, is_active AS isActive FROM simulation_templates ORDER BY id ASC');
+    const templates = await query('SELECT id, name, description, modules, total_seconds AS totalSeconds, followup_prompt AS followupPrompt, is_active AS isActive FROM simulation_templates WHERE is_active = 1 ORDER BY id ASC');
     const settings = await query<RowDataPacket[]>('SELECT provider, websocket_url AS websocketUrl, model, api_key AS apiKey FROM realtime_asr_settings WHERE id = 1 LIMIT 1');
     const row = settings[0];
     return Response.json({ templates, realtimeAsr: row ? { provider: row.provider, websocketUrl: row.websocketUrl, model: row.model, apiKeySet: Boolean(row.apiKey), apiKeyPreview: preview(row.apiKey) } : null });
@@ -18,7 +18,12 @@ export async function GET() {
 export async function PATCH(request: Request) {
   try {
     await admin();
-    const body = await request.json() as { template?: { id?: number; name?: string; description?: string; modules?: unknown; totalSeconds?: number; followupPrompt?: string; isActive?: boolean }; realtimeAsr?: { provider?: string; websocketUrl?: string; model?: string; apiKey?: string } };
+    const body = await request.json() as { deleteTemplateId?: number; template?: { id?: number; name?: string; description?: string; modules?: unknown; totalSeconds?: number; followupPrompt?: string; isActive?: boolean }; realtimeAsr?: { provider?: string; websocketUrl?: string; model?: string; apiKey?: string } };
+    if (Number(body.deleteTemplateId) > 0) {
+      const result = await execute('UPDATE simulation_templates SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND is_active = 1', [Number(body.deleteTemplateId)]);
+      if (!result.affectedRows) return Response.json({ error: '模拟流程不存在或已删除' }, { status: 404 });
+      return GET();
+    }
     if (body.template) {
       const item = body.template; const name = String(item.name || '').trim(); const modules = Array.isArray(item.modules) ? item.modules : [];
       const totalSeconds = Math.max(60, Number(item.totalSeconds) || 1800);
