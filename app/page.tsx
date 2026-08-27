@@ -1,8 +1,10 @@
 'use client';
 
 import fixWebmDuration from 'fix-webm-duration';
+import MarkdownContent from '@/components/MarkdownContent';
+import UsageManagement from '@/components/UsageManagement';
 
-import { FormEvent, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 
 type Category = string;
 type User = { id: number; username: string; displayName: string; role: 'admin' | 'student' };
@@ -64,84 +66,6 @@ function formatTranscriptTime(milliseconds: number) {
 function AudioWithDuration({ src, className = '' }: { src: string; className?: string }) {
   return <audio className={className} controls preload="metadata" src={src} />;
 }
-function markdownInline(value: string): ReactNode[] {
-  // AI responses may contain escaped asterisks, full-width asterisks, or
-  // zero-width characters between asterisks. Normalize them before parsing.
-  const normalized = String(value)
-    .normalize('NFKC')
-    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, '')
-    .replace(/\\+(\*)/g, '$1');
-  const nodes: ReactNode[] = [];
-  const tokens = normalized.split(/(`[^`]+`|\[[^\]]+\]\([^\)]+\))/g).filter(Boolean);
-  let key = 0;
-  for (const token of tokens) {
-    if (token.startsWith('`') && token.endsWith('`')) { nodes.push(<code key={key++}>{token.slice(1, -1)}</code>); continue; }
-    const link = token.match(/^\[([^\]]+)\]\(([^\)]+)\)$/);
-    if (link) { nodes.push(<a key={key++} href={link[2]} target={'_blank'} rel={'noreferrer'}>{link[1]}</a>); continue; }
-    const parts = token.split(/(\*{2,3}[\s\S]+?\*{2,3})/g).filter(Boolean);
-    for (const part of parts) {
-      const bold = part.match(/^\*{2,3}([\s\S]*?)\*{2,3}$/);
-      nodes.push(bold ? <strong key={key++}>{bold[1]}</strong> : <span key={key++}>{part}</span>);
-    }
-  }
-  return nodes;
-}
-
-function MarkdownContent({ value, className = '' }: { value: string; className?: string }) {
-  const lines = String(value || '').replace(/\r\n/g, '\n').split('\n');
-  const blocks: ReactNode[] = [];
-  let paragraph: string[] = [];
-  let list: { ordered: boolean; items: string[] } | null = null;
-  let code: string[] | null = null;
-
-  const flushParagraph = () => {
-    if (!paragraph.length) return;
-    blocks.push(<p key={'p-' + blocks.length}>{paragraph.join(' ')}</p>);
-    paragraph = [];
-  };
-  const flushList = () => {
-    if (!list) return;
-    const Tag = list.ordered ? 'ol' : 'ul';
-    blocks.push(<Tag key={'list-' + blocks.length}>{list.items.map((item, index) => <li key={index}>{markdownInline(item)}</li>)}</Tag>);
-    list = null;
-  };
-  const flushCode = () => {
-    if (!code) return;
-    blocks.push(<pre key={'code-' + blocks.length}><code>{code.join('\n')}</code></pre>);
-    code = null;
-  };
-
-  lines.forEach((line) => {
-    if (line.trim().startsWith('```')) {
-      flushParagraph(); flushList();
-      if (code) flushCode(); else code = [];
-      return;
-    }
-    if (code) { code.push(line); return; }
-    if (!line.trim()) { flushParagraph(); flushList(); return; }
-    if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
-      flushParagraph(); flushList(); blocks.push(<hr key={'hr-' + blocks.length} />); return;
-    }
-    const heading = line.match(/^(#{1,3})\s+(.+)$/);
-    if (heading) { flushParagraph(); flushList(); blocks.push(<h3 key={'h-' + blocks.length} data-level={heading[1].length}>{markdownInline(heading[2])}</h3>); return; }
-    const boldOnly = line.trim().match(/^\*\*([\s\S]+?)\*\*$/);
-    if (boldOnly) { flushParagraph(); flushList(); blocks.push(<h4 key={'h4-' + blocks.length}>{markdownInline(boldOnly[1])}</h4>); return; }
-    const bullet = line.match(/^\s*[-*+]\s+(.+)$/);
-    const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
-    if (bullet || ordered) {
-      flushParagraph();
-      const isOrdered = Boolean(ordered);
-      if (!list || list.ordered !== isOrdered) { flushList(); list = { ordered: isOrdered, items: [] }; }
-      list.items.push((bullet || ordered)![1]);
-      return;
-    }
-    if (line.startsWith('>')) { flushParagraph(); flushList(); blocks.push(<blockquote key={'q-' + blocks.length}>{markdownInline(line.replace(/^>\s?/, ''))}</blockquote>); return; }
-    paragraph.push(line.trim());
-  });
-  flushParagraph(); flushList(); flushCode();
-  return <div className={'markdown-content ' + className}>{blocks}</div>;
-}
-
 export default function Home() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1000,7 +924,7 @@ function UsageBarChart({ days }: { days: ApiUsageDay[] }) {
   return <figure className="usage-chart-card"><figcaption><span>语音 API 用量</span><strong>{days.reduce((total, item) => total + item.asrRequests, 0)} <em>次转写</em></strong><small>深色：普通转写任务 · 浅色：实时转写秒数</small></figcaption><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="最近七天语音 API 用量柱状图"><line x1={pad} x2={width - pad} y1={pad} y2={pad} /><line x1={pad} x2={width - pad} y1={height / 2} y2={height / 2} /><line x1={pad} x2={width - pad} y1={height - pad} y2={height - pad} />{days.map((item, index) => { const x = pad + index * group + group * .2; const barWidth = group * .24; const asrHeight = item.asrRequests / max * (height - pad * 2); const liveHeight = item.realtimeSeconds / max * (height - pad * 2); return <g key={item.label}><rect className="usage-bar-asr" x={x} y={height - pad - asrHeight} width={barWidth} height={asrHeight} rx="3"><title>{item.label}：普通转写 {item.asrRequests} 次</title></rect><rect className="usage-bar-live" x={x + barWidth + 5} y={height - pad - liveHeight} width={barWidth} height={liveHeight} rx="3"><title>{item.label}：实时转写 {item.realtimeSeconds} 秒</title></rect><text x={x + barWidth + 2.5} y={height - 7} textAnchor="middle">{item.label}</text></g>; })}</svg></figure>;
 }
 
-function UsageManagement() {
+function LegacyUsageManagement() {
   const [users, setUsers] = useState<ApiUsageUser[]>([]); const [daily, setDaily] = useState<ApiUsageDay[]>([]); const [message, setMessage] = useState(''); const [savingId, setSavingId] = useState(0);
   const load = useCallback(async () => { try { const data = await jsonFetch('/api/usage'); setUsers(data.users || []); setDaily(data.daily || []); } catch (error) { setMessage((error as Error).message); } }, []);
   useEffect(() => { void load(); }, [load]);
