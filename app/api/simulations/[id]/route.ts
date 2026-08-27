@@ -22,3 +22,15 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     return Response.json({ ok: true });
   } catch (error) { return apiError(error); }
 }
+export async function DELETE(_request: Request, context: { params: Promise<{ id: string }> }) {
+  try {
+    const user = await requireUser(); const { id: rawId } = await context.params; const sessionId = Number(rawId);
+    const sessions = await query<RowDataPacket[]>('SELECT user_id AS userId, status FROM simulation_sessions WHERE id = ? LIMIT 1', [sessionId]);
+    const session = sessions[0];
+    if (!session || (Number(session.userId) !== user.id && user.role !== 'admin')) return Response.json({ error: '模拟场次不存在或无权删除' }, { status: 404 });
+    if (String(session.status) === 'completed') return Response.json({ error: '已完成的模拟记录不能通过退出操作删除' }, { status: 409 });
+    await execute('DELETE FROM simulation_answers WHERE session_id = ?', [sessionId]);
+    await execute('DELETE FROM simulation_sessions WHERE id = ?', [sessionId]);
+    return Response.json({ ok: true });
+  } catch (error) { return apiError(error); }
+}
