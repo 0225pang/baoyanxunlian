@@ -71,7 +71,7 @@ export async function GET(request: Request) {
     const bucket = range.period === '24h' ? "DATE_FORMAT(l.created_at, '%m-%d %H:00')" : range.period === 'all' ? "DATE_FORMAT(l.created_at, '%Y-%m')" : "DATE_FORMAT(l.created_at, '%Y-%m-%d')";
     const dailyRows = await query<RowDataPacket[]>(`SELECT ${bucket} AS bucket, feature,
       COALESCE(SUM(input_tokens + output_tokens), 0) AS tokens, COALESCE(SUM(request_count), 0) AS requests,
-      COALESCE(SUM(audio_seconds), 0) AS seconds FROM api_usage_logs
+      COALESCE(SUM(audio_seconds), 0) AS seconds FROM api_usage_logs l
       WHERE ${logPeriodWhere}${filter} GROUP BY bucket, l.feature ORDER BY bucket ASC`, filterParams);
     const dailyByBucket = new Map<string, Record<string, { tokens: number; requests: number; seconds: number }>>();
     for (const row of dailyRows) {
