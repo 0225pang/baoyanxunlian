@@ -53,7 +53,7 @@ function startPayload(taskId, setting, sampleRate) {
       task: 'asr',
       function: 'recognition',
       model: setting.model,
-      input: { format: 'pcm', sample_rate: sampleRate, language_type: 'zh' },
+      parameters: { format: 'pcm', sample_rate: sampleRate, language_type: 'zh' },
     },
   });
 }
