@@ -137,10 +137,23 @@ export default function Home() {
     } catch { setMessage('无法使用麦克风，请在浏览器地址栏允许录音权限。'); }
   }, [playCue]);
 
-  const loadRecords = useCallback(async (category = '', search = '') => {
+  const loadRecords = useCallback(async (category = '', search = ''): Promise<RecordItem[]> => {
     const data = await jsonFetch(`/api/records?category=${encodeURIComponent(category)}&q=${encodeURIComponent(search)}`);
     setRecords(data.records);
+    return data.records as RecordItem[];
   }, []);
+
+  const refreshReviewGroup = useCallback(async () => {
+    const refreshedRecords = await loadRecords();
+    setReviewGroup((current) => {
+      if (!current) return current;
+      const attempts = refreshedRecords.filter((item) => item.userId === current.userId && (
+        current.questionId ? item.questionId === current.questionId : item.question === current.question
+      ));
+      if (!attempts.length) return current;
+      return { ...current, category: attempts[0].category, question: attempts[0].question, username: attempts[0].username, attempts };
+    });
+  }, [loadRecords]);
 
   useEffect(() => {
     Promise.all([jsonFetch('/api/auth/me'), jsonFetch('/api/settings'), jsonFetch('/api/question-types')])
@@ -289,7 +302,7 @@ export default function Home() {
 
     {page === 'history' && <History records={records} cards={homeCards} autoTranscribe={autoTranscribe} onFilter={loadRecords} onNew={() => setPage('home')} onContinue={continueFromRecord} onReview={(group) => { setReviewGroup(group); setPage('review'); }} />}
     {page === 'settings' && <Settings autoRecord={autoRecord} avoidRepeated={avoidRepeated} readQuestion={readQuestion} onChange={(value, repeated, read) => { setAutoRecord(value); setAvoidRepeated(repeated); setReadQuestion(read); }} />}
-    {page === 'review' && reviewGroup && <ReviewPage group={reviewGroup} autoTranscribe={autoTranscribe} onBack={() => { setPage('history'); void loadRecords(); }} />}
+    {page === 'review' && reviewGroup && <ReviewPage group={reviewGroup} autoTranscribe={autoTranscribe} onRefreshRecords={refreshReviewGroup} onBack={() => { setPage('history'); void loadRecords(); }} />}
     {page === 'management' && user.role === 'admin' && <Management />}
     <footer><span>小鱼食品保研 · 保研面试训练</span><span>让准备看得见，让表达更从容。</span></footer>
   </div>;
@@ -615,7 +628,7 @@ function Login({ onSubmit, message }: { onSubmit: (event: FormEvent<HTMLFormElem
   return <div className="login-shell"><form className="login-card" onSubmit={registering ? register : onSubmit}><b className="login-mark">研</b><small>YANLU INTERVIEW TRAINER</small><h1>{registering ? '申请注册' : '欢迎回来'}</h1><p>{registering ? '提交后需管理员审核通过才能登录' : '登录后开始你的保研面试训练'}</p>{registering && <label>姓名<input name="displayName" autoComplete="name" required /></label>}<label>账号<input name="username" autoComplete="username" required /></label><label>密码<input name="password" type="password" minLength={registering ? 8 : undefined} autoComplete={registering ? 'new-password' : 'current-password'} required /></label>{(registering ? registerMessage : message) && <div className={registerMessage.includes('已提交') ? 'form-success' : 'form-error'}>{registering ? registerMessage : message}</div>}<button type="submit">{registering ? '提交注册申请 →' : '登录系统 →'}</button><button type="button" className="login-switch" onClick={() => { setRegistering(!registering); setRegisterMessage(''); }}>{registering ? '已有账号？返回登录' : '没有账号？申请注册'}</button></form></div>;
 }
 
-function History({ records, cards, autoTranscribe, onFilter, onNew, onContinue, onReview }: { records: RecordItem[]; cards: HomeCard[]; autoTranscribe: boolean; onFilter: (category?: string, search?: string) => Promise<void>; onNew: () => void; onContinue: (item: RecordItem) => void; onReview: (group: RecordGroup) => void }) {
+function History({ records, cards, autoTranscribe, onFilter, onNew, onContinue, onReview }: { records: RecordItem[]; cards: HomeCard[]; autoTranscribe: boolean; onFilter: (category?: string, search?: string) => Promise<unknown>; onNew: () => void; onContinue: (item: RecordItem) => void; onReview: (group: RecordGroup) => void }) {
   const [category, setCategory] = useState('');
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
@@ -676,13 +689,21 @@ function History({ records, cards, autoTranscribe, onFilter, onNew, onContinue, 
       return <article className="record-group" key={group.key}><b>{String((page - 1) * pageSize + index + 1).padStart(2, '0')}</b><div className="record-group-main"><small>{group.username ? '学员：' + group.username + ' · ' : ''}{group.category} · {group.attempts.length} 次作答</small><h3>{group.question}</h3><p className="record-latest">{formatRecordDate(latest.createdAt)} · {latest.hasAudio ? '含录音' : '无录音'} · {latest.referenceAnswer ? '有参考答案' : '暂无参考答案'}</p><div className="record-group-actions"><button className="record-open" onClick={() => onReview(group)}>查看复盘 <span>→</span></button>{latest.questionId && latest.typeId && <button className="record-continue" onClick={() => onContinue(latest)}>继续作答</button>}</div></div></article>;
     }) : <div className="empty"><b>复</b><h3>还没有作答记录</h3><p>完成一次练习后，录音、答案和复盘信息会出现在这里。</p></div>}</section>
     <div className="pagination"><button disabled={page <= 1} onClick={() => setPage(page - 1)}>← 上一页</button><span>第 {page} / {totalPages} 页</span><button disabled={page >= totalPages} onClick={() => setPage(page + 1)}>下一页 →</button><form className="page-jump" onSubmit={jump}><input type="number" min="1" max={totalPages} value={jumpPage} onChange={(event) => setJumpPage(event.target.value)} /><button>跳转</button></form></div>
-    {selectedGroup && <div className="modal-backdrop record-detail-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedKey(null); }}><section className="record-detail-modal" role="dialog" aria-modal="true" aria-labelledby="record-detail-title"><button type="button" className="modal-close" aria-label="关闭记录详情" onClick={() => setSelectedKey(null)}>×</button><span className="section-kicker">PRACTICE DETAIL</span><small className="record-detail-meta">{selectedGroup.username ? '学员：' + selectedGroup.username + ' · ' : ''}{selectedGroup.category} · {selectedGroup.attempts.length} 次作答</small><h2 id="record-detail-title">{selectedGroup.question}</h2><div className="record-detail-actions"><button className="review-trigger" onClick={() => { onReview(selectedGroup); setSelectedKey(null); }}>进入 AI 复盘</button>{selectedGroup.attempts[0].questionId && selectedGroup.attempts[0].typeId && <button className="modal-submit" onClick={() => { onContinue(selectedGroup.attempts[0]); setSelectedKey(null); }}>继续作答</button>}</div><section className="detail-reference">{selectedGroup.attempts[0].referenceAnswer ? <><span className="section-kicker">REFERENCE ANSWER</span><h3>参考答案</h3><p>{selectedGroup.attempts[0].referenceAnswer}</p></> : <><span className="section-kicker">REFERENCE ANSWER</span><h3>暂无参考答案</h3><p>这道题暂时没有配置参考答案。</p></>}</section><div className="detail-attempts"><h3>每次具体作答</h3>{selectedGroup.attempts.map((item, index) => <article className="detail-attempt" key={item.id}><div className="detail-attempt-head"><strong>第 {selectedGroup.attempts.length - index} 次</strong><small>{formatRecordDate(item.createdAt)}</small></div><p className="detail-answer-label">文字作答</p><p className="detail-answer">{item.answer || '本次未填写文字作答。'}</p>{item.hasAudio ? <TranscriptViewer item={item} onTranscribe={() => void transcribe(item)} /> : <p className="no-audio">这次作答没有录音。</p>}</article>)}</div><section className="ai-placeholder"><span className="section-kicker">AI REVIEW</span><h3>AI 复盘已经独立成页</h3><p>点击上方“进入 AI 复盘”，可以生成评估、查看历史比较并继续对话。</p></section></section></div>}
+    {selectedGroup && <div className="modal-backdrop record-detail-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedKey(null); }}><section className="record-detail-modal" role="dialog" aria-modal="true" aria-labelledby="record-detail-title"><button type="button" className="modal-close" aria-label="关闭记录详情" onClick={() => setSelectedKey(null)}>×</button><span className="section-kicker">PRACTICE DETAIL</span><small className="record-detail-meta">{selectedGroup.username ? '学员：' + selectedGroup.username + ' · ' : ''}{selectedGroup.category} · {selectedGroup.attempts.length} 次作答</small><h2 id="record-detail-title">{selectedGroup.question}</h2><div className="record-detail-actions"><button className="review-trigger" onClick={() => { onReview(selectedGroup); setSelectedKey(null); }}>进入 AI 复盘</button>{selectedGroup.attempts[0].questionId && selectedGroup.attempts[0].typeId && <button className="modal-submit" onClick={() => { onContinue(selectedGroup.attempts[0]); setSelectedKey(null); }}>继续作答</button>}</div><section className="detail-reference">{selectedGroup.attempts[0].referenceAnswer ? <><span className="section-kicker">REFERENCE ANSWER</span><h3>参考答案</h3><p>{selectedGroup.attempts[0].referenceAnswer}</p></> : <><span className="section-kicker">REFERENCE ANSWER</span><h3>暂无参考答案</h3><p>这道题暂时没有配置参考答案。</p></>}</section><div className="detail-attempts"><h3>每次具体作答</h3>{selectedGroup.attempts.map((item, index) => <article className="detail-attempt" key={item.id}><div className="detail-attempt-head"><strong>第 {selectedGroup.attempts.length - index} 次</strong><small>{formatRecordDate(item.createdAt)}</small></div><p className="detail-answer-label">文字作答</p><p className="detail-answer">{item.answer || '本次未填写文字作答。'}</p>{item.hasAudio ? <TranscriptViewer item={item} onTranscribe={() => void transcribe(item)} onRefresh={async () => { await onFilter(category, search); }} /> : <p className="no-audio">这次作答没有录音。</p>}</article>)}</div><section className="ai-placeholder"><span className="section-kicker">AI REVIEW</span><h3>AI 复盘已经独立成页</h3><p>点击上方“进入 AI 复盘”，可以生成评估、查看历史比较并继续对话。</p></section></section></div>}
   </main>;
 }
-function TranscriptViewer({ item, autoTranscribe = false, onTranscribe }: { item: RecordItem; autoTranscribe?: boolean; onTranscribe: () => void }) {
+function TranscriptViewer({ item, autoTranscribe = false, onTranscribe, onRefresh }: { item: RecordItem; autoTranscribe?: boolean; onTranscribe: () => void; onRefresh?: () => void | Promise<void> }) {
   const [mode, setMode] = useState<'full' | 'segments'>('full');
+  const [refreshing, setRefreshing] = useState(false);
   const segments = parseTranscriptSegments(item.transcriptSegments);
   const canShowSegments = segments.length > 0;
+
+  async function refreshStatus() {
+    if (!onRefresh || refreshing) return;
+    setRefreshing(true);
+    try { await onRefresh(); }
+    finally { setRefreshing(false); }
+  }
 
   if (item.transcriptStatus === 'completed' && item.transcript) {
     return <div className="detail-audio"><audio controls preload="none" src={'/api/records/' + item.id + '/audio'} /><div className="transcript-box"><div className="transcript-toolbar"><span className="transcript-state done">录音文字稿</span>{canShowSegments && <div className="transcript-toggle"><button type="button" className={mode === 'full' ? 'active' : ''} onClick={() => setMode('full')}>完整文字</button><button type="button" className={mode === 'segments' ? 'active' : ''} onClick={() => setMode('segments')}>时间分片</button></div>}</div>{mode === 'segments' && canShowSegments ? <div className="transcript-segments">{segments.map((segment, index) => <p className="transcript-segment" key={segment.startMs + '-' + segment.endMs + '-' + index}><time>{formatTranscriptTime(segment.startMs)} - {formatTranscriptTime(segment.endMs)}</time><span>{segment.text}</span></p>)}</div> : <p>{item.transcript}</p>}</div></div>;
@@ -694,7 +715,7 @@ function TranscriptViewer({ item, autoTranscribe = false, onTranscribe }: { item
     return <div className={'detail-audio'}><audio controls preload={'none'} src={'/api/records/' + item.id + '/audio'} /><div className={'transcript-box'}><span className={'transcript-state pending'}>自动转写已开启</span><p>录音保存后会自动生成文字稿，请稍候查看。</p></div></div>;
   }
   if (item.transcriptStatus === 'processing') {
-    return <div className="detail-audio"><audio controls preload="none" src={'/api/records/' + item.id + '/audio'} /><div className="transcript-box"><span className="transcript-state pending">正在生成文字稿…</span><p>转写服务正在处理，请稍候，页面会自动刷新。</p></div></div>;
+    return <div className="detail-audio"><audio controls preload="none" src={'/api/records/' + item.id + '/audio'} /><div className="transcript-box"><span className="transcript-state pending">正在生成文字稿…</span><p>文字稿通常需要约 10～60 秒；音频较长时可能需要 1～3 分钟。页面会每隔几秒自动刷新，若离开页面后回来仍未更新，请点击下方按钮。</p>{onRefresh && <button type="button" className="transcript-refresh" disabled={refreshing} onClick={() => void refreshStatus()}>{refreshing ? '刷新中…' : '↻ 刷新文字稿状态'}</button>}</div></div>;
   }
   if (item.transcriptStatus === 'failed') {
     return <div className="detail-audio"><audio controls preload="none" src={'/api/records/' + item.id + '/audio'} /><div className="transcript-box"><span className="transcript-state failed">生成失败</span><p>{item.transcriptError || '转写失败，请重试。'}</p><button type="button" onClick={onTranscribe}>重新生成文字稿</button></div></div>;
@@ -806,7 +827,7 @@ function Users() {
 type AiEvaluation = { id: number; status: string; result: string | null; error: string | null; createdAt: string; completedAt?: string | null };
 type AiMessage = { id: number; role: 'user' | 'assistant'; content: string; evaluationId?: number | null; createdAt?: string };
 
-function ReviewPage({ group, autoTranscribe, onBack }: { group: RecordGroup; autoTranscribe: boolean; onBack: () => void }) {
+function ReviewPage({ group, autoTranscribe, onRefreshRecords, onBack }: { group: RecordGroup; autoTranscribe: boolean; onRefreshRecords: () => Promise<void>; onBack: () => void }) {
   const [evaluations, setEvaluations] = useState<AiEvaluation[]>([]);
   const [expandedEvaluationIds, setExpandedEvaluationIds] = useState<number[] | null>(null);
   const [messages, setMessages] = useState<AiMessage[]>([]);
@@ -829,10 +850,15 @@ function ReviewPage({ group, autoTranscribe, onBack }: { group: RecordGroup; aut
   }, [questionId, group.userId]);
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
-    if (!evaluations.some((item) => item.status === 'processing')) return;
-    const timer = window.setInterval(() => { void load(); }, 4000);
+    const hasProcessingEvaluation = evaluations.some((item) => item.status === 'processing');
+    const hasProcessingTranscript = group.attempts.some((item) => item.transcriptStatus === 'processing');
+    if (!hasProcessingEvaluation && !hasProcessingTranscript) return;
+    const timer = window.setInterval(() => {
+      if (hasProcessingEvaluation) void load();
+      if (hasProcessingTranscript) void onRefreshRecords().catch(() => undefined);
+    }, 4000);
     return () => window.clearInterval(timer);
-  }, [evaluations, load]);
+  }, [evaluations, group.attempts, load, onRefreshRecords]);
 
   async function generate() {
     if (!questionId || generating) return;
@@ -886,7 +912,7 @@ function ReviewPage({ group, autoTranscribe, onBack }: { group: RecordGroup; aut
     try {
       await jsonFetch('/api/records/' + item.id + '/transcription', { method: 'POST' });
       setMessage('已开始生成文字稿，请稍候。');
-      await load();
+      await Promise.all([load(), onRefreshRecords()]);
     } catch (error) { setMessage((error as Error).message); }
   }
 
@@ -902,7 +928,7 @@ function ReviewPage({ group, autoTranscribe, onBack }: { group: RecordGroup; aut
       <section className="review-main">
         <div className="review-question-card"><span className="section-kicker">INTERVIEW QUESTION</span><h2>{group.question}</h2><div className="review-question-meta"><span>{group.category}</span><span>{group.attempts.length} 次作答</span><span>{latest.hasReferenceAnswer ? '有参考答案' : '暂无参考答案'}</span></div></div>
         <section className="review-section"><div className="review-section-title"><div><span className="section-kicker">RECENT ATTEMPTS</span><h2>最近的回答</h2></div><small>按时间倒序，最多取 3 次</small></div>{group.attempts.slice(0, 3).map((item, index) => {
-          return <article className="review-attempt" key={item.id}><div className="review-attempt-head"><strong>第 {group.attempts.length - index} 次</strong><small>{formatRecordDate(item.createdAt)}</small></div><p className="review-answer">{item.answer || '本次没有填写文字作答。'}</p>{item.hasAudio && <TranscriptViewer item={item} autoTranscribe={autoTranscribe} onTranscribe={() => void transcribeAttempt(item)} />}</article>;
+          return <article className="review-attempt" key={item.id}><div className="review-attempt-head"><strong>第 {group.attempts.length - index} 次</strong><small>{formatRecordDate(item.createdAt)}</small></div><p className="review-answer">{item.answer || '本次没有填写文字作答。'}</p>{item.hasAudio && <TranscriptViewer item={item} autoTranscribe={autoTranscribe} onTranscribe={() => void transcribeAttempt(item)} onRefresh={onRefreshRecords} />}</article>;
         })}</section>
       </section>
       <section className="review-evaluations review-section"><div className="review-section-title"><div><span className="section-kicker">EVALUATIONS</span><h2>评估结果</h2></div><small>{loading ? '正在读取…' : evaluations.length + ' 次评估'}</small></div>{evaluations.length ? evaluations.map((item, index) => <details className="evaluation-card" key={item.id} open={expandedEvaluationIds ? expandedEvaluationIds.includes(item.id) : index === 0} onToggle={(event) => { const isOpen = event.currentTarget.open; setExpandedEvaluationIds((current) => { const next = new Set(current ?? evaluations.filter((_value, position) => position === 0).map((value) => value.id)); if (isOpen) next.add(item.id); else next.delete(item.id); return [...next]; }); }}><summary><span><strong>{index === 0 ? '最新评估' : '历史评估 ' + (evaluations.length - index)}</strong><small>{formatRecordDate(item.createdAt)}</small></span><em>{item.status === 'processing' ? '生成中' : item.status === 'completed' ? '已完成' : '失败'}</em></summary>{item.status === 'processing' && <p className="evaluation-pending">AI 正在分析最近的回答，请稍候，页面会自动刷新。</p>}{item.status === 'failed' && <p className="evaluation-error">{item.error || '本次评估失败。'}</p>}{item.status === 'completed' && <MarkdownContent value={item.result || ''} className="evaluation-result" />}</details>) : <div className="review-empty">还没有评估。生成评估后，这里会保留每一次可展开查看的反馈。</div>}</section>
