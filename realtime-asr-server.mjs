@@ -49,6 +49,9 @@ function startPayload(taskId, setting, sampleRate) {
   return JSON.stringify({
     header: { action: 'run-task', task_id: taskId, streaming: 'duplex' },
     payload: {
+      task_group: 'audio',
+      task: 'asr',
+      function: 'recognition',
       model: setting.model,
       input: { format: 'pcm', sample_rate: sampleRate, language_type: 'zh' },
     },
