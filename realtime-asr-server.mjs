@@ -51,7 +51,6 @@ function startPayload(taskId, setting, sampleRate) {
     payload: {
       model: setting.model,
       input: { format: 'pcm', sample_rate: sampleRate, language_type: 'zh' },
-      parameters: { semantic_punctuation_enabled: true, heartbeat: true },
     },
   });
 }
@@ -112,12 +111,29 @@ server.on('connection', (client) => {
         for (const audio of pendingAudio.splice(0)) upstream.send(audio, { binary: true });
         send(client, { type: 'ready' });
       });
+      let upstreamFailure = '';
       upstream.on('message', (data) => {
-        try { send(client, { type: 'result', data: JSON.parse(data.toString()) }); }
-        catch { send(client, { type: 'result', data: { raw: data.toString() } }); }
+        try {
+          const payload = JSON.parse(data.toString());
+          const header = payload?.header || {};
+          if (header.event === 'task-failed' || header.error_code || header.error_message) {
+            upstreamFailure = String(header.error_message || payload?.payload?.output?.message || payload?.message || '百炼拒绝了实时转写任务');
+            send(client, { type: 'error', error: upstreamFailure, data: payload });
+            return;
+          }
+          send(client, { type: 'result', data: payload });
+        } catch { send(client, { type: 'result', data: { raw: data.toString() } }); }
       });
-      upstream.on('error', (error) => send(client, { type: 'error', error: `实时 ASR 上游连接失败：${error.message}` }));
-      upstream.on('close', (code, reason) => { send(client, { type: 'closed', code, reason: reason.toString() }); upstream = null; });
+      upstream.on('error', (error) => {
+        upstreamFailure = `实时 ASR 上游连接失败：${error.message}`;
+        send(client, { type: 'error', error: upstreamFailure });
+      });
+      upstream.on('close', (code, reason) => {
+        const closeReason = reason.toString() || upstreamFailure || `百炼连接关闭（${code}）`;
+        console.warn(`Realtime ASR upstream closed: code=${code} reason=${closeReason}`);
+        send(client, { type: 'closed', code, reason: closeReason, failed: Boolean(upstreamFailure) });
+        upstream = null;
+      });
     } catch (error) {
       send(client, { type: 'error', error: error instanceof Error ? error.message : '实时转写启动失败' });
       client.close(1011, 'configuration error');
