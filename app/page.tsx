@@ -3,6 +3,8 @@
 import fixWebmDuration from 'fix-webm-duration';
 import MarkdownContent from '@/components/MarkdownContent';
 import UsageManagement from '@/components/UsageManagement';
+import SimulationConfig from '@/components/SimulationConfig';
+import SimulationHistory from '@/components/SimulationHistory';
 
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 
@@ -301,7 +303,7 @@ function QuestionPicker({ types, onBack, onPick }: { types: QuestionType[]; onBa
   return <main className="picker-page"><button className="back" onClick={onBack}>← 返回练习方式</button><header><span className="section-kicker">PICK A QUESTION</span><h1>从题库选题</h1><p>筛选后直接选择一题练习，作答方式、录音和复盘与随机抽题完全一致。</p></header><form className="picker-filters" onSubmit={(event) => { event.preventDefault(); void load(1); }}><select value={typeId} onChange={(event) => setTypeId(event.target.value)}><option value="">全部题型</option>{types.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</select><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索题目或具体分类" /><button>筛选题目</button></form>{message && <div className="management-message">{message}</div>}<section className="picker-list">{questions.map((item) => <article key={item.id}><div><span className="tag-chip">{item.category}</span>{item.subcategory && <span className="tag-chip">{item.subcategory}</span>}<h2>{item.content}</h2><small>{item.hasAnswer ? '已配置参考答案' : '暂无参考答案'}</small></div><button onClick={() => onPick(item)}>练习这道题</button></article>)}{!questions.length && <div className="empty"><h3>没有符合条件的题目</h3><p>换一个筛选条件，或请管理员补充题库。</p></div>}</section><div className="pagination"><button disabled={page <= 1} onClick={() => void load(page - 1)}>← 上一页</button><span>第 {page} / {totalPages} 页</span><button disabled={page >= totalPages} onClick={() => void load(page + 1)}>下一页 →</button></div></main>;
 }
 
-type SimulationStep = { id: string; title: string; kind: 'intro' | 'question'; typeCode?: string; count?: number; timeSeconds?: number; allowFollowup?: boolean; prompt?: string; questionId?: number; question?: string; category?: string; subcategory?: string | null };
+type SimulationStep = { id: string; title: string; kind: 'intro' | 'question' | 'fixed'; typeCode?: string; count?: number; timeSeconds?: number; allowFollowup?: boolean; prompt?: string; questionId?: number; question?: string; category?: string; subcategory?: string | null; referenceAnswer?: string | null };
 type SimulationTemplate = { id: number; name: string; description: string; totalSeconds: number; modules: SimulationStep[] | string; followupPrompt?: string; isActive?: boolean };
 function downsamplePcm(input: Float32Array, inputRate: number, outputRate = 16000) {
   if (inputRate === outputRate) {
@@ -507,7 +509,7 @@ function SimulationLobby({ templates, templateId, onSelect, onStart, onBack, for
 
 type SimulationEvaluation = { id: number; status: string; result: string | null; error: string | null; createdAt: string; completedAt?: string | null };
 
-function SimulationHistory({ onBack }: { onBack: () => void }) {
+function LegacySimulationHistory({ onBack }: { onBack: () => void }) {
   const [records, setRecords] = useState<SimulationRecord[]>([]); const [templateFilter, setTemplateFilter] = useState(''); const [selected, setSelected] = useState<SimulationRecord | null>(null);
   const [detail, setDetail] = useState<{ session: SimulationRecord; answers: Array<{ id: number; moduleIndex: number; moduleTitle: string; question: string; answer?: string | null; transcript?: string | null; elapsedSeconds: number; hasAudio: number; createdAt: string }> } | null>(null);
   const [evaluations, setEvaluations] = useState<SimulationEvaluation[]>([]); const [chatMessages, setChatMessages] = useState<Array<{ id: number; role: 'user' | 'assistant'; content: string }>>([]);
@@ -940,7 +942,7 @@ function Management() {
   return <main className="management-hub"><header className="management-hub-head"><div><p className="eyebrow">— ADMIN CONSOLE</p><h1>管理后台</h1><p>集中管理用户、题库、AI 和真实模拟配置。</p></div></header><nav className="management-tabs"><button className={tab === 'users' ? 'active' : ''} onClick={() => setTab('users')}>用户管理<span>注册审批与账号</span></button><button className={tab === 'questions' ? 'active' : ''} onClick={() => setTab('questions')}>题库管理<span>题目与 Excel</span></button><button className={tab === 'ai' ? 'active' : ''} onClick={() => setTab('ai')}>AI 模型管理<span>平台、模型与提示词</span></button><button className={tab === 'simulation' ? 'active' : ''} onClick={() => setTab('simulation')}>真实模拟<span>流程与实时转写</span></button><button className={tab === 'usage' ? 'active' : ''} onClick={() => setTab('usage')}>用量额度<span>API 权限与消耗</span></button></nav><div className="management-hub-content">{tab === 'users' ? <Users /> : tab === 'questions' ? <QuestionBank /> : tab === 'ai' ? <AiConfig /> : tab === 'simulation' ? <SimulationConfig /> : <UsageManagement />}</div></main>;
 }
 
-function SimulationConfig() {
+function LegacySimulationConfig() {
   const [templates, setTemplates] = useState<SimulationTemplate[]>([]); const [selected, setSelected] = useState<SimulationTemplate | null>(null); const [realtime, setRealtime] = useState<{ provider: string; websocketUrl: string; model: string; apiKey?: string; apiKeySet?: boolean; apiKeyPreview?: string } | null>(null); const [message, setMessage] = useState('');
   const load = useCallback(async () => { try { const data = await jsonFetch('/api/simulations/config'); setTemplates(data.templates || []); setSelected((current) => (current?.id && data.templates?.some((item: SimulationTemplate) => item.id === current.id) ? data.templates.find((item: SimulationTemplate) => item.id === current.id) : data.templates?.[0]) || null); setRealtime(data.realtimeAsr); } catch (error) { setMessage((error as Error).message); } }, []);
   useEffect(() => { void load(); }, [load]);
