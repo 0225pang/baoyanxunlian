@@ -68,7 +68,7 @@ const schema = [
     user_id BIGINT UNSIGNED NOT NULL PRIMARY KEY,
     auto_record TINYINT(1) NOT NULL DEFAULT 1,
     avoid_repeated TINYINT(1) NOT NULL DEFAULT 0,
-    read_question TINYINT(1) NOT NULL DEFAULT 0,
+    read_question TINYINT(1) NOT NULL DEFAULT 1,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     CONSTRAINT fk_settings_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
@@ -104,6 +104,10 @@ const schema = [
     active_prompt_id BIGINT UNSIGNED NULL,
     auto_transcribe TINYINT(1) NOT NULL DEFAULT 0,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE TABLE IF NOT EXISTS app_migrations (
+    name VARCHAR(120) NOT NULL PRIMARY KEY,
+    applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS asr_settings (
     id TINYINT UNSIGNED NOT NULL PRIMARY KEY,
@@ -352,8 +356,11 @@ async function initializeDatabase(db: Pool) {
     await db.query('ALTER TABLE user_settings ADD COLUMN avoid_repeated TINYINT(1) NOT NULL DEFAULT 0');
   }
   if (!(await hasColumn(db, 'user_settings', 'read_question'))) {
-    await db.query('ALTER TABLE user_settings ADD COLUMN read_question TINYINT(1) NOT NULL DEFAULT 0');
+    await db.query('ALTER TABLE user_settings ADD COLUMN read_question TINYINT(1) NOT NULL DEFAULT 1');
   }
+  await db.query('ALTER TABLE user_settings MODIFY COLUMN read_question TINYINT(1) NOT NULL DEFAULT 1');
+  const [readQuestionMigration] = await db.query<ResultSetHeader>('INSERT IGNORE INTO app_migrations (name) VALUES (?)', ['read_question_default_enabled']);
+  if (readQuestionMigration.affectedRows) await db.query('UPDATE user_settings SET read_question = 1 WHERE read_question = 0');
 
   // Seed mock questions only for a completely empty question bank. Existing
   // question types or questions are preserved and never receive extra rows.
