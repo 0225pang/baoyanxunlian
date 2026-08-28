@@ -109,6 +109,13 @@ export async function POST(request: Request) {
     const rows = await query<RowDataPacket[]>('SELECT content FROM questions WHERE id=? LIMIT 1', [questionId]); const question = rows[0];
     if (!question) return Response.json({ error: '所选题目不存在。' }, { status: 404 });
     const settings = await getTtsSettings(); const model = clean(body.model || settings.defaultModel, 150); const parameters = body.parameters && typeof body.parameters === 'object' ? body.parameters : {};
+    const profileCode = clean(parameters.profileCode, 80);
+    if (profileCode) {
+      const existing = await query<RowDataPacket[]>(`SELECT id FROM question_voices
+        WHERE question_id=? AND kind='generated' AND status='ready'
+        AND JSON_UNQUOTE(JSON_EXTRACT(parameters, '$.profileCode'))=? LIMIT 1`, [questionId, profileCode]);
+      if (existing[0]) return Response.json({ id: Number(existing[0].id), skipped: true, state: await readState() });
+    }
     const result = await execute('INSERT INTO question_voices (question_id,name,kind,status,model,voice_id,parameters,public_token) VALUES (?,?,?,?,?,?,?,?)', [questionId, name, 'generated', 'processing', model, voiceId, JSON.stringify(parameters), createPublicToken()]) as ResultSetHeader;
     const id = Number(result.insertId);
     try {
