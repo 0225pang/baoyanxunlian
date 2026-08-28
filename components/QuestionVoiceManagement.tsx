@@ -3,7 +3,7 @@
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
 
-type Settings = { publicBaseUrl: string; cloneUrl: string; websocketUrl: string; sambertWebsocketUrl: string; synthesisUrl: string; apiKey?: string; apiKeySet?: boolean; apiKeyPreview?: string };
+type Settings = { publicBaseUrl: string; cloneUrl: string; websocketUrl: string; sambertWebsocketUrl: string; synthesisUrl: string; apiKey?: string; apiKeySet?: boolean; apiKeyPreview?: string; sambertApiKey?: string; sambertApiKeySet?: boolean; sambertApiKeyPreview?: string };
 type Question = { id: number; content: string; typeName: string };
 type Voice = { id: number; questionId: number | null; name: string; kind: 'custom' | 'generated'; status: 'processing' | 'ready' | 'failed'; model?: string; voiceId?: string; hasSource?: boolean; hasOutput: boolean; error?: string };
 type VoiceData = { settings: Settings; questions: Question[]; voices: Voice[] };
@@ -161,6 +161,7 @@ export default function QuestionVoiceManagement() {
         <label>声音复刻 REST API<input value={settings.cloneUrl} onChange={(event) => setSettings({ ...settings, cloneUrl: event.target.value })} placeholder="https://{WorkspaceId}.cn-beijing.../customization" /></label>
         <label className="wide">Qwen TTS Workspace WebSocket（复刻音色）<input value={settings.websocketUrl} onChange={(event) => setSettings({ ...settings, websocketUrl: event.target.value })} placeholder="wss://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference" /></label>
         <label className="wide">Sambert WebSocket（预设音色）<input value={settings.sambertWebsocketUrl} onChange={(event) => setSettings({ ...settings, sambertWebsocketUrl: event.target.value })} placeholder="wss://dashscope.aliyuncs.com/api-ws/v1/inference" /></label>
+        <label>Sambert API Key（可单独设置）<input type="password" value={settings.sambertApiKey || ''} placeholder={settings.sambertApiKeySet ? `已保存：${settings.sambertApiKeyPreview || '已隐藏'}` : '留空则使用 Qwen API Key'} onChange={(event) => setSettings({ ...settings, sambertApiKey: event.target.value })} /></label>
         <label className="wide">旧版 HTTP 合成地址（可留空，当前优先使用上方 WebSocket）<input value={settings.synthesisUrl} onChange={(event) => setSettings({ ...settings, synthesisUrl: event.target.value })} /></label>
         <label>百炼 API Key<input type="password" value={settings.apiKey || ''} placeholder={settings.apiKeySet ? `已保存：${settings.apiKeyPreview || '已隐藏'}` : '输入后保存'} onChange={(event) => setSettings({ ...settings, apiKey: event.target.value })} /></label>
       </div><button className="voice-save" onClick={() => void saveSettings()} disabled={busy}>保存配置</button></section>
@@ -181,7 +182,7 @@ export default function QuestionVoiceManagement() {
       <section className="voice-action-card"><h3>声音参数</h3>
         <label>风格<select value={styleIndex} onChange={(event) => { const index = Number(event.target.value); setStyleIndex(index); setInstruction(VOICE_STYLES[index][2]); }}>{VOICE_STYLES.map((style, index) => <option key={style[0]} value={index}>{style[1]}</option>)}</select></label>
         {sourceMode === 'clone' ? <label>Qwen 指令 instruction<textarea value={instruction} onChange={(event) => setInstruction(event.target.value)} /></label> : <p>Sambert 是预定义音色模型，不发送 Qwen 的自然语言 instruction；仅使用下列音频参数。</p>}
-        <div className="voice-parameters"><label>语速<input type="number" min="0.5" max="2" step="0.05" value={rate} onChange={(event) => setRate(event.target.value)} /></label><label>音调<input type="number" min="0.5" max="2" step="0.05" value={pitch} onChange={(event) => setPitch(event.target.value)} /></label><label>音量<input type="number" min="0" max="100" value={volume} onChange={(event) => setVolume(event.target.value)} /></label><label>格式<select value={format} onChange={(event) => setFormat(event.target.value)}><option value="mp3">MP3</option><option value="wav">WAV</option></select></label></div>
+        <div className="voice-parameters"><label>语速<input type="number" min="0.5" max="2" step="0.05" value={rate} onChange={(event) => setRate(event.target.value)} /></label><label>音调<input type="number" min="0.5" max="2" step="0.05" value={pitch} onChange={(event) => setPitch(event.target.value)} /></label><label>音量<input type="number" min="0" max="100" value={volume} onChange={(event) => setVolume(event.target.value)} /></label><label>格式<select value={format} onChange={(event) => setFormat(event.target.value)}><option value="mp3">MP3</option><option value="wav">WAV</option></select></label>{sourceMode === 'preset' && <label>采样率<input type="number" min="8000" step="1000" defaultValue="16000" onChange={(event) => setExtra((value) => { try { return JSON.stringify({ ...JSON.parse(value || '{}'), sample_rate: Number(event.target.value) || 16000 }, null, 2); } catch { return '{\n  "sample_rate": 16000\n}'; } })} /></label>}</div>
         <label>额外参数 JSON<textarea value={extra} onChange={(event) => setExtra(event.target.value)} placeholder='例如 {"bit_rate":128}' /></label>
       </section>
 

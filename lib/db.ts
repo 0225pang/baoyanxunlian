@@ -247,6 +247,7 @@ const schema = [
     synthesis_url VARCHAR(500) NULL,
     websocket_url VARCHAR(500) NULL,
     sambert_websocket_url VARCHAR(500) NULL,
+    sambert_api_key TEXT NULL,
     api_key TEXT NULL,
     public_base_url VARCHAR(500) NULL,
     clone_model VARCHAR(150) NOT NULL DEFAULT 'voice-enrollment',
@@ -395,6 +396,9 @@ async function ensureQuestionVoiceColumns(db: Pool) {
   await db.query('ALTER TABLE question_voices MODIFY COLUMN question_id BIGINT UNSIGNED NULL');
   if (!(await hasColumn(db, 'tts_settings', 'sambert_websocket_url'))) {
     await db.query('ALTER TABLE tts_settings ADD COLUMN sambert_websocket_url VARCHAR(500) NULL AFTER websocket_url');
+  }
+  if (!(await hasColumn(db, 'tts_settings', 'sambert_api_key'))) {
+    await db.query('ALTER TABLE tts_settings ADD COLUMN sambert_api_key TEXT NULL AFTER sambert_websocket_url');
   }
 }
 async function initializeDatabase(db: Pool) {
@@ -564,11 +568,12 @@ async function initializeDatabase(db: Pool) {
   }
   const [ttsRows] = await db.query<RowDataPacket[]>('SELECT COUNT(*) AS count FROM tts_settings');
   if (Number(ttsRows[0].count) === 0) {
-    await db.query('INSERT INTO tts_settings (id, provider, clone_url, synthesis_url, websocket_url, sambert_websocket_url, api_key, public_base_url) VALUES (1, ?, ?, ?, ?, ?, ?, ?)', [
+    await db.query('INSERT INTO tts_settings (id, provider, clone_url, synthesis_url, websocket_url, sambert_websocket_url, sambert_api_key, api_key, public_base_url) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)', [
       'bailian', process.env.DASHSCOPE_TTS_CLONE_URL || null,
       process.env.DASHSCOPE_TTS_URL || 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text2speech/speech-synthesis',
       process.env.DASHSCOPE_TTS_WS_URL || 'wss://dashscope.aliyuncs.com/api-ws/v1/inference/',
       process.env.DASHSCOPE_SAMBERT_TTS_WS_URL || 'wss://dashscope.aliyuncs.com/api-ws/v1/inference/',
+      process.env.DASHSCOPE_SAMBERT_API_KEY || null,
       process.env.DASHSCOPE_API_KEY || process.env.BAILIAN_API_KEY || null,
       process.env.TTS_PUBLIC_BASE_URL || process.env.ASR_PUBLIC_BASE_URL || null,
     ]);

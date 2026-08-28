@@ -24,7 +24,15 @@ async function readState() {
     DATE_FORMAT(v.created_at, '%Y-%m-%dT%H:%i:%s') AS createdAt, q.content AS question
     FROM question_voices v LEFT JOIN questions q ON q.id = v.question_id ORDER BY v.created_at DESC`);
   return {
-    settings: { ...settings, apiKey: undefined, apiKeySet: Boolean(settings.apiKey), apiKeyPreview: secretPreview(settings.apiKey) },
+    settings: {
+      ...settings,
+      apiKey: undefined,
+      sambertApiKey: undefined,
+      apiKeySet: Boolean(settings.apiKey),
+      apiKeyPreview: secretPreview(settings.apiKey),
+      sambertApiKeySet: Boolean(settings.sambertApiKey),
+      sambertApiKeyPreview: secretPreview(settings.sambertApiKey),
+    },
     questions: questions.map((item) => ({ id: Number(item.id), content: String(item.content), typeName: String(item.typeName) })),
     voices: voices.map((item) => ({ ...item, id: Number(item.id), questionId: item.questionId === null ? null : Number(item.questionId), parameters: parseParameters(item.parameters), hasSource: Boolean(item.sourceFilename), hasOutput: Boolean(item.outputMime) })),
   };
@@ -39,14 +47,14 @@ export async function PATCH(request: Request) {
     if (!body.settings) return Response.json(await readState());
     const current = await getTtsSettings(); const value = body.settings;
     const provider = clean(value.provider || current.provider, 50) || 'bailian';
-    const cloneUrl = clean(value.cloneUrl, 500); const synthesisUrl = clean(value.synthesisUrl, 500); const websocketUrl = clean(value.websocketUrl, 500); const sambertWebsocketUrl = clean(value.sambertWebsocketUrl, 500); const publicBaseUrl = clean(value.publicBaseUrl, 500).replace(/\/+$/, '');
+    const cloneUrl = clean(value.cloneUrl, 500); const synthesisUrl = clean(value.synthesisUrl, 500); const websocketUrl = clean(value.websocketUrl, 500); const sambertWebsocketUrl = clean(value.sambertWebsocketUrl, 500); const sambertApiKey = clean(value.sambertApiKey, 1000); const publicBaseUrl = clean(value.publicBaseUrl, 500).replace(/\/+$/, '');
     const cloneModel = clean(value.cloneModel || current.cloneModel, 150) || 'voice-enrollment';
     const cloneTargetModel = clean(value.cloneTargetModel || current.cloneTargetModel, 150) || 'qwen-audio-3.0-tts-flash';
     const defaultModel = clean(value.defaultModel || current.defaultModel, 150) || 'qwen-audio-3.0-tts-flash';
     const apiKey = clean(value.apiKey, 1000);
     if (![cloneUrl, synthesisUrl, websocketUrl, sambertWebsocketUrl, publicBaseUrl].every(validUrl)) return Response.json({ error: 'API 地址必须以 http(s):// 或 ws(s):// 开头。' }, { status: 400 });
-    if (apiKey) await execute('UPDATE tts_settings SET provider=?, clone_url=?, synthesis_url=?, websocket_url=?, sambert_websocket_url=?, api_key=?, public_base_url=?, clone_model=?, clone_target_model=?, default_model=?, updated_at=CURRENT_TIMESTAMP WHERE id=1', [provider, cloneUrl || null, synthesisUrl || null, websocketUrl || null, sambertWebsocketUrl || null, apiKey, publicBaseUrl || null, cloneModel, cloneTargetModel, defaultModel]);
-    else await execute('UPDATE tts_settings SET provider=?, clone_url=?, synthesis_url=?, websocket_url=?, sambert_websocket_url=?, public_base_url=?, clone_model=?, clone_target_model=?, default_model=?, updated_at=CURRENT_TIMESTAMP WHERE id=1', [provider, cloneUrl || null, synthesisUrl || null, websocketUrl || null, sambertWebsocketUrl || null, publicBaseUrl || null, cloneModel, cloneTargetModel, defaultModel]);
+    if (apiKey) await execute('UPDATE tts_settings SET provider=?, clone_url=?, synthesis_url=?, websocket_url=?, sambert_websocket_url=?, sambert_api_key=COALESCE(NULLIF(?, \'\'), sambert_api_key), api_key=?, public_base_url=?, clone_model=?, clone_target_model=?, default_model=?, updated_at=CURRENT_TIMESTAMP WHERE id=1', [provider, cloneUrl || null, synthesisUrl || null, websocketUrl || null, sambertWebsocketUrl || null, sambertApiKey, apiKey, publicBaseUrl || null, cloneModel, cloneTargetModel, defaultModel]);
+    else await execute('UPDATE tts_settings SET provider=?, clone_url=?, synthesis_url=?, websocket_url=?, sambert_websocket_url=?, sambert_api_key=COALESCE(NULLIF(?, \'\'), sambert_api_key), public_base_url=?, clone_model=?, clone_target_model=?, default_model=?, updated_at=CURRENT_TIMESTAMP WHERE id=1', [provider, cloneUrl || null, synthesisUrl || null, websocketUrl || null, sambertWebsocketUrl || null, sambertApiKey, publicBaseUrl || null, cloneModel, cloneTargetModel, defaultModel]);
     return Response.json(await readState());
   } catch (error) {
     console.error('Question voice settings update failed:', error);
