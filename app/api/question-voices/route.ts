@@ -17,11 +17,11 @@ async function readState() {
     v.voice_id AS voiceId, v.source_filename AS sourceFilename, v.source_mime AS sourceMime,
     v.output_mime AS outputMime, v.parameters, v.error, v.public_token AS publicToken,
     DATE_FORMAT(v.created_at, '%Y-%m-%dT%H:%i:%s') AS createdAt, q.content AS question
-    FROM question_voices v JOIN questions q ON q.id = v.question_id ORDER BY v.created_at DESC`);
+    FROM question_voices v LEFT JOIN questions q ON q.id = v.question_id ORDER BY v.created_at DESC`);
   return {
     settings: { ...settings, apiKey: undefined, apiKeySet: Boolean(settings.apiKey), apiKeyPreview: secretPreview(settings.apiKey) },
     questions: questions.map((item) => ({ id: Number(item.id), content: String(item.content), typeName: String(item.typeName) })),
-    voices: voices.map((item) => ({ ...item, id: Number(item.id), questionId: Number(item.questionId), parameters: item.parameters ? JSON.parse(String(item.parameters)) : {}, hasSource: Boolean(item.sourceFilename), hasOutput: Boolean(item.outputMime) })),
+    voices: voices.map((item) => ({ ...item, id: Number(item.id), questionId: item.questionId === null ? null : Number(item.questionId), parameters: item.parameters ? JSON.parse(String(item.parameters)) : {}, hasSource: Boolean(item.sourceFilename), hasOutput: Boolean(item.outputMime) })),
   };
 }
 
@@ -53,20 +53,18 @@ export async function POST(request: Request) {
     if (contentType.includes('multipart/form-data')) {
       const form = await request.formData();
       if (String(form.get('action')) !== 'clone') return Response.json({ error: '不支持的上传操作。' }, { status: 400 });
-      const questionId = Number(form.get('questionId')); const name = clean(form.get('name'), 160) || '复刻音色';
+      const name = clean(form.get('name'), 160) || '复刻音色';
       const prefix = clean(form.get('prefix'), 80) || 'fishvoice'; const model = clean(form.get('targetModel'), 150);
       const file = form.get('audio');
-      if (!Number.isInteger(questionId) || questionId < 1 || !(file instanceof File) || !file.size) return Response.json({ error: '请选择题目并上传有效的声音样本。' }, { status: 400 });
+      if (!(file instanceof File) || !file.size) return Response.json({ error: '请上传有效的声音样本。' }, { status: 400 });
       if (file.size > 25 * 1024 * 1024) return Response.json({ error: '声音样本不能超过 25MB。' }, { status: 400 });
-      const [questions] = await Promise.all([query<RowDataPacket[]>('SELECT id FROM questions WHERE id=? LIMIT 1', [questionId])]);
-      if (!questions[0]) return Response.json({ error: '所选题目不存在。' }, { status: 404 });
       const settings = await getTtsSettings(); const token = createPublicToken();
-      const result = await execute('INSERT INTO question_voices (question_id,name,kind,status,model,source_filename,source_mime,public_token) VALUES (?,?,?,?,?,?,?,?)', [questionId, name, 'custom', 'processing', model || settings.cloneTargetModel, friendlyFileName(file.name), file.type || 'audio/wav', token]) as ResultSetHeader;
+      const result = await execute('INSERT INTO question_voices (question_id,name,kind,status,model,source_filename,source_mime,public_token) VALUES (?,?,?,?,?,?,?,?)', [null, name, 'custom', 'processing', model || settings.cloneTargetModel, friendlyFileName(file.name), file.type || 'audio/wav', token]) as ResultSetHeader;
       const id = Number(result.insertId); const sourcePath = await storeQuestionVoiceFile(id, file.name, Buffer.from(await file.arrayBuffer()), 'source');
       await execute('UPDATE question_voices SET source_path=? WHERE id=?', [sourcePath, id]);
       try {
         const publicUrl = sourcePublicUrl(settings, id, token);
-        const cloned = await createClonedVoice(settings, `${prefix}-${id}`, publicUrl, model || settings.cloneTargetModel);
+        const cloned = await createClonedVoice(settings, `${prefix}${id}`, publicUrl, model || settings.cloneTargetModel);
         await execute('UPDATE question_voices SET status=?, voice_id=?, error=NULL WHERE id=?', ['ready', cloned.voiceId, id]);
         return Response.json({ id, voiceId: cloned.voiceId, publicUrl, state: await readState() }, { status: 201 });
       } catch (error) {
@@ -74,7 +72,24 @@ export async function POST(request: Request) {
         throw error;
       }
     }
-    const body = await request.json() as { action?: string; questionId?: number; name?: string; model?: string; voiceId?: string; parameters?: Record<string, unknown> };
+    const body = await request.json() as { action?: string; id?: number; questionId?: number; name?: string; model?: string; voiceId?: string; parameters?: Record<string, unknown> };
+    if (body.action === 'retry-clone') {
+      const id = Number(body.id);
+      if (!Number.isInteger(id) || id < 1) return Response.json({ error: '复刻音色记录无效。' }, { status: 400 });
+      const rows = await query<RowDataPacket[]>('SELECT id, kind, source_path AS sourcePath, public_token AS publicToken, model FROM question_voices WHERE id=? LIMIT 1', [id]);
+      const voice = rows[0];
+      if (!voice || String(voice.kind) !== 'custom' || !voice.sourcePath) return Response.json({ error: '找不到可重试的声音样本。' }, { status: 404 });
+      const settings = await getTtsSettings();
+      await execute('UPDATE question_voices SET status=?, error=NULL WHERE id=?', ['processing', id]);
+      try {
+        const cloned = await createClonedVoice(settings, `fishvoice${id}`, sourcePublicUrl(settings, id, String(voice.publicToken)), String(voice.model || settings.cloneTargetModel));
+        await execute('UPDATE question_voices SET status=?, voice_id=?, error=NULL WHERE id=?', ['ready', cloned.voiceId, id]);
+        return Response.json({ id, voiceId: cloned.voiceId, state: await readState() });
+      } catch (error) {
+        await execute('UPDATE question_voices SET status=?, error=? WHERE id=?', ['failed', error instanceof Error ? error.message.slice(0, 3000) : '声音复刻失败', id]);
+        throw error;
+      }
+    }
     if (body.action !== 'synthesize') return Response.json({ error: '不支持的语音操作。' }, { status: 400 });
     const questionId = Number(body.questionId); const voiceId = clean(body.voiceId, 255); const name = clean(body.name, 160) || '生成语音';
     if (!Number.isInteger(questionId) || questionId < 1 || !voiceId) return Response.json({ error: '请选择题目并填写要使用的 voice ID。' }, { status: 400 });
@@ -92,7 +107,15 @@ export async function POST(request: Request) {
       await execute('UPDATE question_voices SET status=?, error=? WHERE id=?', ['failed', error instanceof Error ? error.message.slice(0, 3000) : '语音生成失败', id]);
       throw error;
     }
-  } catch (error) { return apiError(error); }
+  } catch (error) {
+    console.error('Question voice operation failed:', error);
+    // This is an administrator-only configuration tool. Surface the provider
+    // response so invalid workspace URLs and public sample URLs are diagnosable.
+    if (error instanceof Error && error.message !== 'UNAUTHORIZED' && error.message !== 'FORBIDDEN') {
+      return Response.json({ error: error.message.slice(0, 3000) }, { status: 500 });
+    }
+    return apiError(error);
+  }
 }
 
 export async function DELETE(request: Request) {

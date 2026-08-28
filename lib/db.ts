@@ -255,7 +255,9 @@ const schema = [
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS question_voices (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-    question_id BIGINT UNSIGNED NOT NULL,
+    -- Cloned voice IDs are reusable across all questions. Generated audio
+    -- files alone are attached to a concrete question.
+    question_id BIGINT UNSIGNED NULL,
     name VARCHAR(160) NOT NULL,
     kind VARCHAR(20) NOT NULL DEFAULT 'custom',
     status VARCHAR(20) NOT NULL DEFAULT 'ready',
@@ -386,6 +388,11 @@ async function ensureSimulationColumns(db: Pool) {
     await db.query("ALTER TABLE simulation_templates ADD COLUMN module_timeout_mode VARCHAR(20) NOT NULL DEFAULT 'warn' AFTER total_seconds");
   }
 }
+async function ensureQuestionVoiceColumns(db: Pool) {
+  // Earlier deployments bound cloned voices to the question selected during
+  // upload. Keep existing records, but allow new global voice profiles.
+  await db.query('ALTER TABLE question_voices MODIFY COLUMN question_id BIGINT UNSIGNED NULL');
+}
 async function initializeDatabase(db: Pool) {
   for (const statement of schema) await db.query(statement);
   await db.query("ALTER TABLE users MODIFY COLUMN status ENUM('pending', 'active', 'rejected', 'deleted') NOT NULL DEFAULT 'active'");
@@ -393,6 +400,7 @@ async function initializeDatabase(db: Pool) {
   await ensurePracticeRecordColumns(db);
   await ensureAiColumns(db);
   await ensureSimulationColumns(db);
+  await ensureQuestionVoiceColumns(db);
   if (!(await hasColumn(db, 'user_settings', 'avoid_repeated'))) {
     await db.query('ALTER TABLE user_settings ADD COLUMN avoid_repeated TINYINT(1) NOT NULL DEFAULT 0');
   }
