@@ -61,10 +61,17 @@ export async function getTtsSettings(): Promise<TtsSettings> {
     clone_model AS cloneModel, clone_target_model AS cloneTargetModel, default_model AS defaultModel
     FROM tts_settings WHERE id = 1 LIMIT 1`);
   const row = rows[0] || {};
+  const qwenWorkspaceUrl = clean(row.websocketUrl);
+  const configuredSambertUrl = clean(row.sambertWebsocketUrl);
+  // Older versions saved the generic DashScope endpoint here. The official
+  // Sambert Java SDK example requires the regional Workspace endpoint.
+  const sambertWebsocketUrl = /^wss:\/\/dashscope\.aliyuncs\.com\/api-ws\/v1\/inference\/?$/i.test(configuredSambertUrl) && qwenWorkspaceUrl
+    ? qwenWorkspaceUrl
+    : (configuredSambertUrl || qwenWorkspaceUrl || 'wss://dashscope.aliyuncs.com/api-ws/v1/inference');
   return {
     provider: clean(row.provider || 'bailian'),
-    cloneUrl: clean(row.cloneUrl), synthesisUrl: clean(row.synthesisUrl), websocketUrl: clean(row.websocketUrl),
-    sambertWebsocketUrl: clean(row.sambertWebsocketUrl || row.websocketUrl || 'wss://dashscope.aliyuncs.com/api-ws/v1/inference'),
+    cloneUrl: clean(row.cloneUrl), synthesisUrl: clean(row.synthesisUrl), websocketUrl: qwenWorkspaceUrl,
+    sambertWebsocketUrl,
     sambertApiKey: String(row.sambertApiKey || '').trim(),
     apiKey: String(row.apiKey || '').trim(), publicBaseUrl: clean(row.publicBaseUrl),
     cloneModel: clean(row.cloneModel || 'voice-enrollment'),
@@ -172,22 +179,35 @@ async function synthesizeSambertWithOfficialSdk(settings: TtsSettings, input: { 
     enablePhonemeTimestamp: Boolean(input.parameters.enable_phoneme_timestamp),
   };
   const jar = path.join(process.cwd(), 'bin', 'sambert-tts-bridge.jar');
+  console.info(`[Sambert Java SDK] model=${input.model} endpoint=${settings.sambertWebsocketUrl}`);
   return new Promise<{ audio: Buffer; mime: string }>((resolve, reject) => {
     const child = spawn('java', ['-jar', jar], {
       env: { ...process.env, DASHSCOPE_SAMBERT_API_KEY: apiKey, DASHSCOPE_SAMBERT_WS_URL: settings.sambertWebsocketUrl },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
-    const stdout: Buffer[] = []; const stderr: Buffer[] = []; let settled = false;
+    const stdout: Buffer[] = []; const stderr: Buffer[] = []; let settled = false; let timedOut = false;
     const finish = (error?: Error) => {
       if (settled) return;
       settled = true; clearTimeout(timer);
       if (error) reject(error); else resolve({ audio: Buffer.concat(stdout), mime });
     };
-    const timer = setTimeout(() => { child.kill('SIGTERM'); finish(new Error('Sambert 官方 Java SDK 合成超时，请稍后重试。')); }, 90000);
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+      setTimeout(() => {
+        const detail = Buffer.concat(stderr).toString('utf8').slice(0, 2000);
+        finish(new Error(`Sambert 官方 Java SDK 合成超时：模型 ${input.model}，端点 ${settings.sambertWebsocketUrl}${detail ? `；SDK 输出：${detail}` : ''}`));
+      }, 1500);
+    }, 90000);
     child.stdout.on('data', (chunk: Buffer) => stdout.push(Buffer.from(chunk)));
     child.stderr.on('data', (chunk: Buffer) => stderr.push(Buffer.from(chunk)));
     child.on('error', (error) => finish(new Error(`无法启动 Sambert Java SDK：${error.message}`)));
     child.on('close', (code) => {
+      if (timedOut) {
+        const detail = Buffer.concat(stderr).toString('utf8').slice(0, 2000);
+        finish(new Error(`Sambert 官方 Java SDK 合成超时：模型 ${input.model}，端点 ${settings.sambertWebsocketUrl}${detail ? `；SDK 输出：${detail}` : ''}`));
+        return;
+      }
       if (code !== 0) {
         const detail = Buffer.concat(stderr).toString('utf8').slice(0, 4000);
         finish(new Error(`Sambert 官方 Java SDK 调用失败${code === null ? '' : `（退出码 ${code}）`}：${detail || '未返回具体错误'}`));
