@@ -31,7 +31,11 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV TZ=Asia/Shanghai
-RUN apt-get update \
+RUN sed -i \
+    -e 's|deb.debian.org|mirrors.aliyun.com|g' \
+    -e 's|security.debian.org|mirrors.aliyun.com|g' \
+    /etc/apt/sources.list.d/debian.sources \
+  && apt-get update \
   && apt-get install -y --no-install-recommends openjdk-17-jre-headless \
   && rm -rf /var/lib/apt/lists/* \
   && groupadd --system --gid 1001 nodejs \
