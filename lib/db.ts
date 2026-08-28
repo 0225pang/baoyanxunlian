@@ -239,7 +239,41 @@ const schema = [
     content LONGTEXT NOT NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_simulation_messages_conversation (session_id, created_at)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,  `CREATE TABLE IF NOT EXISTS user_api_limits (
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE TABLE IF NOT EXISTS tts_settings (
+    id TINYINT UNSIGNED NOT NULL PRIMARY KEY,
+    provider VARCHAR(50) NOT NULL DEFAULT 'bailian',
+    clone_url VARCHAR(500) NULL,
+    synthesis_url VARCHAR(500) NULL,
+    websocket_url VARCHAR(500) NULL,
+    api_key TEXT NULL,
+    public_base_url VARCHAR(500) NULL,
+    clone_model VARCHAR(150) NOT NULL DEFAULT 'voice-enrollment',
+    clone_target_model VARCHAR(150) NOT NULL DEFAULT 'qwen-audio-3.0-tts-flash',
+    default_model VARCHAR(150) NOT NULL DEFAULT 'qwen-audio-3.0-tts-flash',
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE TABLE IF NOT EXISTS question_voices (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    question_id BIGINT UNSIGNED NOT NULL,
+    name VARCHAR(160) NOT NULL,
+    kind VARCHAR(20) NOT NULL DEFAULT 'custom',
+    status VARCHAR(20) NOT NULL DEFAULT 'ready',
+    model VARCHAR(150) NOT NULL,
+    voice_id VARCHAR(255) NULL,
+    source_path VARCHAR(500) NULL,
+    source_filename VARCHAR(255) NULL,
+    source_mime VARCHAR(120) NULL,
+    output_path VARCHAR(500) NULL,
+    output_mime VARCHAR(120) NULL,
+    parameters JSON NULL,
+    public_token CHAR(64) NOT NULL,
+    error TEXT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_question_voices_question_created (question_id, created_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE TABLE IF NOT EXISTS user_api_limits (
     user_id BIGINT UNSIGNED NOT NULL PRIMARY KEY,
     ai_enabled TINYINT(1) NOT NULL DEFAULT 1,
     asr_enabled TINYINT(1) NOT NULL DEFAULT 1,
@@ -514,6 +548,16 @@ async function initializeDatabase(db: Pool) {
     await db.query('INSERT INTO realtime_asr_settings (id, provider, websocket_url, model, api_key) VALUES (1, ?, ?, ?, ?)', [
       'bailian', process.env.DASHSCOPE_REALTIME_ASR_URL || 'wss://dashscope.aliyuncs.com/api-ws/v1/inference/',
       process.env.DASHSCOPE_REALTIME_ASR_MODEL || 'qwen-audio-3.0-asr-flash-streaming', process.env.DASHSCOPE_API_KEY || process.env.BAILIAN_API_KEY || null,
+    ]);
+  }
+  const [ttsRows] = await db.query<RowDataPacket[]>('SELECT COUNT(*) AS count FROM tts_settings');
+  if (Number(ttsRows[0].count) === 0) {
+    await db.query('INSERT INTO tts_settings (id, provider, clone_url, synthesis_url, websocket_url, api_key, public_base_url) VALUES (1, ?, ?, ?, ?, ?, ?)', [
+      'bailian', process.env.DASHSCOPE_TTS_CLONE_URL || null,
+      process.env.DASHSCOPE_TTS_URL || 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text2speech/speech-synthesis',
+      process.env.DASHSCOPE_TTS_WS_URL || 'wss://dashscope.aliyuncs.com/api-ws/v1/inference/',
+      process.env.DASHSCOPE_API_KEY || process.env.BAILIAN_API_KEY || null,
+      process.env.TTS_PUBLIC_BASE_URL || process.env.ASR_PUBLIC_BASE_URL || null,
     ]);
   }
 }

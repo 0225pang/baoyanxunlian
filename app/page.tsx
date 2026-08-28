@@ -5,6 +5,7 @@ import MarkdownContent from "@/components/MarkdownContent";
 import UsageManagement from "@/components/UsageManagement";
 import SimulationConfig from "@/components/SimulationConfig";
 import SimulationHistory from "@/components/SimulationHistory";
+import QuestionVoiceManagement from "@/components/QuestionVoiceManagement";
 
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 
@@ -5059,7 +5060,7 @@ function LegacyUsageManagement() {
 }
 function Management() {
   const [tab, setTab] = useState<
-    "users" | "questions" | "ai" | "simulation" | "usage"
+    "users" | "questions" | "voice" | "ai" | "simulation" | "usage"
   >("users");
   return (
     <main className="management-hub">
@@ -5082,6 +5083,12 @@ function Management() {
           onClick={() => setTab("questions")}
         >
           题库管理<span>题目与 Excel</span>
+        </button>
+        <button
+          className={tab === "voice" ? "active" : ""}
+          onClick={() => setTab("voice")}
+        >
+          题目语音<span>复刻、生成与试听</span>
         </button>
         <button
           className={tab === "ai" ? "active" : ""}
@@ -5107,6 +5114,8 @@ function Management() {
           <Users />
         ) : tab === "questions" ? (
           <QuestionBank />
+        ) : tab === "voice" ? (
+          <QuestionVoiceManagement />
         ) : tab === "ai" ? (
           <AiConfig />
         ) : tab === "simulation" ? (
