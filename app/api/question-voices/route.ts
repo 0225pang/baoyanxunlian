@@ -8,6 +8,11 @@ export const runtime = 'nodejs';
 async function requireAdmin() { const user = await requireUser(); if (user.role !== 'admin') throw new Error('FORBIDDEN'); }
 function clean(value: unknown, length = 500) { return String(value || '').trim().slice(0, length); }
 function validUrl(value: string) { return !value || /^https?:\/\//i.test(value) || /^wss?:\/\//i.test(value); }
+function parseParameters(value: unknown) {
+  if (!value) return {};
+  if (typeof value === 'object') return value;
+  try { return JSON.parse(String(value)); } catch { return {}; }
+}
 
 async function readState() {
   const settings = await getTtsSettings();
@@ -21,7 +26,7 @@ async function readState() {
   return {
     settings: { ...settings, apiKey: undefined, apiKeySet: Boolean(settings.apiKey), apiKeyPreview: secretPreview(settings.apiKey) },
     questions: questions.map((item) => ({ id: Number(item.id), content: String(item.content), typeName: String(item.typeName) })),
-    voices: voices.map((item) => ({ ...item, id: Number(item.id), questionId: item.questionId === null ? null : Number(item.questionId), parameters: item.parameters ? JSON.parse(String(item.parameters)) : {}, hasSource: Boolean(item.sourceFilename), hasOutput: Boolean(item.outputMime) })),
+    voices: voices.map((item) => ({ ...item, id: Number(item.id), questionId: item.questionId === null ? null : Number(item.questionId), parameters: parseParameters(item.parameters), hasSource: Boolean(item.sourceFilename), hasOutput: Boolean(item.outputMime) })),
   };
 }
 
