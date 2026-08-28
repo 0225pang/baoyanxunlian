@@ -132,7 +132,8 @@ export async function POST(request: Request) {
     const id = Number(result.insertId);
     try {
       const audio = await synthesizeVoice(settings, { text: String(question.content), model, voiceId, parameters });
-      const outputPath = await storeQuestionVoiceFile(id, 'speech.mp3', audio.audio, 'output');
+      const extension = audio.mime === 'audio/wav' ? 'wav' : audio.mime === 'audio/pcm' ? 'pcm' : 'mp3';
+      const outputPath = await storeQuestionVoiceFile(id, `speech.${extension}`, audio.audio, 'output');
       await execute('UPDATE question_voices SET status=?, output_path=?, output_mime=?, error=NULL WHERE id=?', ['ready', outputPath, audio.mime, id]);
       return Response.json({ id, state: await readState() }, { status: 201 });
     } catch (error) {
