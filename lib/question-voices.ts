@@ -155,7 +155,10 @@ async function synthesizeQwenWebSocket(settings: TtsSettings, input: { text: str
     const socket = new WebSocket(settings.websocketUrl, { headers: { Authorization: `bearer ${settings.apiKey}` } });
     const timer = setTimeout(() => fail(new Error('Qwen-Audio-TTS 合成超时，请稍后重试。')), 60000);
     socket.on('open', () => {
-      socket.send(JSON.stringify({ header: { action: 'run-task', task_id: taskId, streaming: 'duplex' }, payload: { task_group: 'audio', task: 'tts', function: 'speech_synthesizer', model: input.model, parameters, input: { text: input.text } } }));
+      // The Qwen duplex endpoint acknowledges run-task before it accepts
+      // input. Supplying text here leaves the task waiting until the server
+      // times out, so start with an empty input just like the ASR protocol.
+      socket.send(JSON.stringify({ header: { action: 'run-task', task_id: taskId, streaming: 'duplex' }, payload: { task_group: 'audio', task: 'tts', function: 'speech_synthesizer', model: input.model, parameters, input: {} } }));
     });
     socket.on('message', (data, isBinary) => {
       if (isBinary) {
@@ -172,6 +175,14 @@ async function synthesizeQwenWebSocket(settings: TtsSettings, input: { text: str
         const message = JSON.parse(data.toString()) as { header?: { event?: string; error_message?: string }; payload?: { output?: { audio?: string } } };
         const event = message.header?.event || '';
         if (message.header?.error_message || event === 'task-failed') { clearTimeout(timer); fail(new Error(message.header?.error_message || 'Qwen-Audio-TTS 任务失败。')); return; }
+        if (event === 'task-started') {
+          // Send the complete fixed question as the first text chunk, then
+          // explicitly complete the duplex task. This mirrors the provider's
+          // streaming lifecycle and prevents its ~23 second input timeout.
+          socket.send(JSON.stringify({ header: { action: 'continue-task', task_id: taskId, streaming: 'duplex' }, payload: { input: { text: input.text } } }));
+          socket.send(JSON.stringify({ header: { action: 'finish-task', task_id: taskId, streaming: 'duplex' }, payload: { input: {} } }));
+          return;
+        }
         const encoded = message.payload?.output?.audio;
         if (encoded && /^[a-zA-Z0-9+/=]+$/.test(encoded)) chunks.push(Buffer.from(encoded, 'base64'));
         if (event === 'task-finished') { clearTimeout(timer); succeed(); }
