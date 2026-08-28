@@ -150,7 +150,9 @@ async function synthesizeQwenWebSocket(settings: TtsSettings, input: { text: str
     const chunks: Buffer[] = []; let settled = false;
     const fail = (error: Error) => { if (settled) return; settled = true; try { socket.close(); } catch { /* ignored */ } reject(error); };
     const succeed = () => { if (settled) return; settled = true; try { socket.close(); } catch { /* ignored */ } if (!chunks.length) { reject(new Error('Qwen-Audio-TTS 未返回音频数据，请检查模型、voice ID 与 WebSocket 配置。')); return; } resolve({ audio: Buffer.concat(chunks), mime: 'audio/mpeg' }); };
-    const socket = new WebSocket(settings.websocketUrl, { headers: { Authorization: `Bearer ${settings.apiKey}` } });
+    // Keep the spelling aligned with the official Node WebSocket example.
+    // Some regional inference gateways reject the initial upgrade otherwise.
+    const socket = new WebSocket(settings.websocketUrl, { headers: { Authorization: `bearer ${settings.apiKey}` } });
     const timer = setTimeout(() => fail(new Error('Qwen-Audio-TTS 合成超时，请稍后重试。')), 60000);
     socket.on('open', () => {
       socket.send(JSON.stringify({ header: { action: 'run-task', task_id: taskId, streaming: 'duplex' }, payload: { task_group: 'audio', task: 'tts', function: 'speech_synthesizer', model: input.model, parameters, input: { text: input.text } } }));
@@ -176,6 +178,16 @@ async function synthesizeQwenWebSocket(settings: TtsSettings, input: { text: str
       } catch { /* Ignore non-JSON metadata frames. */ }
     });
     socket.on('error', (error) => { clearTimeout(timer); fail(new Error(`Qwen-Audio-TTS WebSocket 连接失败：${error.message}`)); });
+    socket.on('unexpected-response', (_request, response) => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk: string) => { body += chunk; });
+      response.on('end', () => {
+        clearTimeout(timer);
+        fail(new Error(`Qwen-Audio-TTS WebSocket 握手被拒绝（HTTP ${response.statusCode || 400}）：${body.slice(0, 800) || '请检查 Workspace 地址、地域对应的 API Key 与模型权限。'}`));
+      });
+      response.on('error', () => { clearTimeout(timer); fail(new Error(`Qwen-Audio-TTS WebSocket 握手被拒绝（HTTP ${response.statusCode || 400}）。`)); });
+    });
     socket.on('close', () => { clearTimeout(timer); if (!settled) succeed(); });
   });
 }
