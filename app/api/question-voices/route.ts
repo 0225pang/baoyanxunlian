@@ -14,6 +14,11 @@ function parseParameters(value: unknown) {
   try { return JSON.parse(String(value)); } catch { return {}; }
 }
 
+function sambertVoiceForModel(model: string) {
+  const matched = model.match(/^sambert-([a-z0-9_-]+)-v\d+$/i);
+  return matched?.[1] || '';
+}
+
 async function readState() {
   const settings = await getTtsSettings();
   const questions = await query<RowDataPacket[]>(`SELECT q.id, q.content, t.name AS typeName FROM questions q
@@ -104,11 +109,15 @@ export async function POST(request: Request) {
       }
     }
     if (body.action !== 'synthesize') return Response.json({ error: '不支持的语音操作。' }, { status: 400 });
-    const questionId = Number(body.questionId); const voiceId = clean(body.voiceId, 255); const name = clean(body.name, 160) || '生成语音';
-    if (!Number.isInteger(questionId) || questionId < 1 || !voiceId) return Response.json({ error: '请选择题目并填写要使用的 voice ID。' }, { status: 400 });
+    const questionId = Number(body.questionId); const name = clean(body.name, 160) || '生成语音';
+    const settings = await getTtsSettings(); const model = clean(body.model || settings.defaultModel, 150);
+    // Sambert model names identify their built-in speaker. Always derive this
+    // value on the server so a cloned Qwen voice ID cannot leak into Sambert.
+    const voiceId = model.startsWith('sambert-') ? sambertVoiceForModel(model) : clean(body.voiceId, 255);
+    if (!Number.isInteger(questionId) || questionId < 1 || !voiceId) return Response.json({ error: model.startsWith('sambert-') ? '无法从 Sambert 模型名识别预设音色，请使用 sambert-<音色名>-v1 格式。' : '请选择要使用的复刻 voice ID。' }, { status: 400 });
     const rows = await query<RowDataPacket[]>('SELECT content FROM questions WHERE id=? LIMIT 1', [questionId]); const question = rows[0];
     if (!question) return Response.json({ error: '所选题目不存在。' }, { status: 404 });
-    const settings = await getTtsSettings(); const model = clean(body.model || settings.defaultModel, 150); const parameters = body.parameters && typeof body.parameters === 'object' ? body.parameters : {};
+    const parameters = body.parameters && typeof body.parameters === 'object' ? body.parameters : {};
     const profileCode = clean(parameters.profileCode, 80);
     if (profileCode) {
       const existing = await query<RowDataPacket[]>(`SELECT id FROM question_voices
