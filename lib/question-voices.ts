@@ -12,6 +12,9 @@ export type TtsSettings = {
   websocketUrl: string;
   sambertWebsocketUrl: string;
   sambertApiKey: string;
+  baiduApiKey: string;
+  baiduSecretKey: string;
+  baiduTtsUrl: string;
   apiKey: string;
   publicBaseUrl: string;
   cloneModel: string;
@@ -45,7 +48,9 @@ function findString(value: unknown, keys: string[]): string {
 export async function getTtsSettings(): Promise<TtsSettings> {
   const rows = await query<RowDataPacket[]>(`SELECT provider, clone_url AS cloneUrl, synthesis_url AS synthesisUrl,
     websocket_url AS websocketUrl, sambert_websocket_url AS sambertWebsocketUrl,
-    sambert_api_key AS sambertApiKey, api_key AS apiKey, public_base_url AS publicBaseUrl,
+    sambert_api_key AS sambertApiKey, baidu_api_key AS baiduApiKey,
+    baidu_secret_key AS baiduSecretKey, baidu_tts_url AS baiduTtsUrl,
+    api_key AS apiKey, public_base_url AS publicBaseUrl,
     clone_model AS cloneModel, clone_target_model AS cloneTargetModel, default_model AS defaultModel
     FROM tts_settings WHERE id = 1 LIMIT 1`);
   const row = rows[0] || {};
@@ -60,6 +65,9 @@ export async function getTtsSettings(): Promise<TtsSettings> {
     provider: clean(row.provider || 'bailian'),
     cloneUrl: clean(row.cloneUrl), synthesisUrl: clean(row.synthesisUrl), websocketUrl: qwenWorkspaceUrl,
     sambertWebsocketUrl, sambertApiKey: String(row.sambertApiKey || '').trim(),
+    baiduApiKey: String(row.baiduApiKey || '').trim(),
+    baiduSecretKey: String(row.baiduSecretKey || '').trim(),
+    baiduTtsUrl: clean(row.baiduTtsUrl || 'https://tsn.baidu.com/text2audio'),
     apiKey: String(row.apiKey || '').trim(), publicBaseUrl: clean(row.publicBaseUrl),
     cloneModel: clean(row.cloneModel || 'voice-enrollment'),
     cloneTargetModel: clean(row.cloneTargetModel || 'qwen-audio-3.0-tts-flash'),
@@ -116,9 +124,53 @@ export async function createClonedVoice(settings: TtsSettings, prefix: string, u
   return { voiceId, payload };
 }
 
-type SynthesisInput = { text: string; model: string; voiceId: string; parameters: Record<string, unknown> };
+type SynthesisInput = { provider?: 'bailian' | 'baidu'; text: string; model: string; voiceId: string; parameters: Record<string, unknown> };
+
+let baiduTokenCache: { token: string; expiresAt: number; apiKey: string } | null = null;
+
+function clampNumber(value: unknown, min: number, max: number, fallback: number) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
+}
+
+async function getBaiduAccessToken(settings: TtsSettings) {
+  if (!settings.baiduApiKey || !settings.baiduSecretKey) throw new Error('请先配置百度语音 API Key 与 Secret Key。');
+  if (baiduTokenCache && baiduTokenCache.apiKey === settings.baiduApiKey && baiduTokenCache.expiresAt > Date.now()) return baiduTokenCache.token;
+  const response = await fetch('https://aip.baidubce.com/oauth/2.0/token', {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'client_credentials', client_id: settings.baiduApiKey, client_secret: settings.baiduSecretKey }).toString(),
+  });
+  const payload = await response.json().catch(() => ({})) as { access_token?: string; expires_in?: number; error_description?: string; error?: string };
+  if (!response.ok || !payload.access_token) throw new Error(`百度 Access Token 获取失败：${payload.error_description || payload.error || `HTTP ${response.status}`}`);
+  baiduTokenCache = { token: payload.access_token, apiKey: settings.baiduApiKey, expiresAt: Date.now() + Math.max(60, (Number(payload.expires_in) || 0) - 60) * 1000 };
+  return payload.access_token;
+}
+
+async function synthesizeBaiduVoice(settings: TtsSettings, input: SynthesisInput) {
+  const token = await getBaiduAccessToken(settings);
+  const format = String(input.parameters.format || 'mp3').toLowerCase();
+  const aue = format === 'wav' ? '6' : format === 'pcm' ? '4' : '3';
+  const form = new URLSearchParams({
+    tex: input.text, tok: token, cuid: 'baoyanxunlian-question-voice', ctp: '1', lan: 'zh', per: '1', aue,
+    spd: String(Math.round(clampNumber(input.parameters.spd, 0, 15, 5))),
+    pit: String(Math.round(clampNumber(input.parameters.pit, 0, 15, 5))),
+    vol: String(Math.round(clampNumber(input.parameters.volume, 0, 9, 5))),
+  });
+  const emotion = String(input.parameters.emotion || '').trim();
+  if (emotion && emotion !== 'neutral') form.set('text_ctrl', JSON.stringify({ emo: emotion }));
+  const response = await fetch(settings.baiduTtsUrl || 'https://tsn.baidu.com/text2audio', {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: '*/*' }, body: form.toString(),
+  });
+  const contentType = (response.headers.get('content-type') || '').toLowerCase();
+  if (!response.ok || (!contentType.startsWith('audio/') && !contentType.includes('octet-stream'))) {
+    throw new Error(`百度语音合成失败：${await responseError(response)}`);
+  }
+  const mime = aue === '6' ? 'audio/wav' : aue === '4' ? 'audio/pcm' : 'audio/mpeg';
+  return { audio: Buffer.from(await response.arrayBuffer()), mime };
+}
 
 export async function synthesizeVoice(settings: TtsSettings, input: SynthesisInput) {
+  if (input.provider === 'baidu') return synthesizeBaiduVoice(settings, input);
   if (input.model.startsWith('sambert-')) return synthesizeSambertWebSocket(settings, input);
   if (!settings.apiKey) throw new Error('请先配置百炼 API Key。');
   if (settings.websocketUrl) return synthesizeQwenWebSocket(input, settings.websocketUrl, settings.apiKey);
