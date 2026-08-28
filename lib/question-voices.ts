@@ -122,7 +122,10 @@ export async function createClonedVoice(settings: TtsSettings, prefix: string, u
 
 export async function synthesizeVoice(settings: TtsSettings, input: { text: string; model: string; voiceId: string; parameters: Record<string, unknown> }) {
   if (!settings.apiKey) throw new Error('请先配置百炼 API Key。');
-  if (input.model.startsWith('qwen-audio') && settings.websocketUrl) {
+  // Qwen-Audio-TTS and Sambert both use the Model Studio workspace
+  // SpeechSynthesizer WebSocket API. Do not send Sambert to the legacy HTTP
+  // endpoint: it responds with the misleading "url error".
+  if (settings.websocketUrl) {
     return synthesizeQwenWebSocket(settings, input);
   }
   if (!settings.synthesisUrl) throw new Error('请先配置语音合成 HTTP API 地址。Qwen-Audio-TTS 如使用 WebSocket，请先填写兼容的 HTTP 合成地址或在后续接入实时播放。');
