@@ -43,7 +43,15 @@ export async function PATCH(request: Request) {
     if (apiKey) await execute('UPDATE tts_settings SET provider=?, clone_url=?, synthesis_url=?, websocket_url=?, api_key=?, public_base_url=?, clone_model=?, clone_target_model=?, default_model=?, updated_at=CURRENT_TIMESTAMP WHERE id=1', [provider, cloneUrl || null, synthesisUrl || null, websocketUrl || null, apiKey, publicBaseUrl || null, cloneModel, cloneTargetModel, defaultModel]);
     else await execute('UPDATE tts_settings SET provider=?, clone_url=?, synthesis_url=?, websocket_url=?, public_base_url=?, clone_model=?, clone_target_model=?, default_model=?, updated_at=CURRENT_TIMESTAMP WHERE id=1', [provider, cloneUrl || null, synthesisUrl || null, websocketUrl || null, publicBaseUrl || null, cloneModel, cloneTargetModel, defaultModel]);
     return Response.json(await readState());
-  } catch (error) { return apiError(error); }
+  } catch (error) {
+    console.error('Question voice settings update failed:', error);
+    // The settings page is administrator-only. Return a useful, non-secret
+    // message instead of hiding database validation/migration failures.
+    if (error instanceof Error && error.message !== 'UNAUTHORIZED' && error.message !== 'FORBIDDEN') {
+      return Response.json({ error: error.message.slice(0, 3000) }, { status: 500 });
+    }
+    return apiError(error);
+  }
 }
 
 export async function POST(request: Request) {
