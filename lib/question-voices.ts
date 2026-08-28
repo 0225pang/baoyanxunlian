@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { spawn } from 'node:child_process';
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { WebSocket } from 'ws';
@@ -63,7 +64,7 @@ export async function getTtsSettings(): Promise<TtsSettings> {
   return {
     provider: clean(row.provider || 'bailian'),
     cloneUrl: clean(row.cloneUrl), synthesisUrl: clean(row.synthesisUrl), websocketUrl: clean(row.websocketUrl),
-    sambertWebsocketUrl: clean(row.sambertWebsocketUrl || 'wss://dashscope.aliyuncs.com/api-ws/v1/inference'),
+    sambertWebsocketUrl: clean(row.sambertWebsocketUrl || row.websocketUrl || 'wss://dashscope.aliyuncs.com/api-ws/v1/inference'),
     sambertApiKey: String(row.sambertApiKey || '').trim(),
     apiKey: String(row.apiKey || '').trim(), publicBaseUrl: clean(row.publicBaseUrl),
     cloneModel: clean(row.cloneModel || 'voice-enrollment'),
@@ -110,21 +111,6 @@ async function responseError(response: Response) {
   return text.slice(0, 700) || `HTTP ${response.status}`;
 }
 
-function sambertParameters(source: Record<string, unknown>) {
-  const format = String(source.format || 'wav').toLowerCase();
-  // SpeechSynthesisParam uses format, sampleRate, volume, rate and pitch.
-  // These keys deliberately differ from Qwen's TTS parameter names.
-  return {
-    format: format === 'pcm' ? 'pcm' : format === 'mp3' ? 'mp3' : 'wav',
-    sample_rate: Number(source.sample_rate) || 16000,
-    volume: Number(source.volume) || 50,
-    rate: Number(source.speech_rate) || 1,
-    pitch: Number(source.pitch_rate) || 1,
-    enable_word_timestamp: Boolean(source.enable_word_timestamp),
-    enable_phoneme_timestamp: Boolean(source.enable_phoneme_timestamp),
-  } satisfies Record<string, unknown>;
-}
-
 export async function createClonedVoice(settings: TtsSettings, prefix: string, url: string, targetModel?: string) {
   if (!settings.apiKey) throw new Error('请先配置百炼 API Key。');
   if (!settings.cloneUrl) throw new Error('请先配置声音复刻 API 地址（需包含百炼 Workspace ID）。');
@@ -141,14 +127,15 @@ export async function createClonedVoice(settings: TtsSettings, prefix: string, u
 
 export async function synthesizeVoice(settings: TtsSettings, input: { text: string; model: string; voiceId: string; parameters: Record<string, unknown> }) {
   const isSambert = input.model.startsWith('sambert-');
+  if (isSambert) return synthesizeSambertWithOfficialSdk(settings, input);
   // Sambert system voices are routed by DashScope's public endpoint while
   // Qwen cloned voices require the workspace endpoint. The SDK uses only the
   // Sambert model name; it does not accept a cloned Qwen voice ID.
-  const websocketUrl = isSambert ? settings.sambertWebsocketUrl : settings.websocketUrl;
-  const apiKey = isSambert ? (settings.sambertApiKey || settings.apiKey) : settings.apiKey;
+  const websocketUrl = settings.websocketUrl;
+  const apiKey = settings.apiKey;
   if (!apiKey) throw new Error(`请先配置${isSambert ? ' Sambert' : '百炼'} API Key。`);
   if (websocketUrl) {
-    return synthesizeQwenWebSocket(input, websocketUrl, apiKey, isSambert);
+    return synthesizeQwenWebSocket(input, websocketUrl, apiKey, false);
   }
   if (!settings.synthesisUrl) throw new Error('请先配置语音合成 HTTP API 地址。Qwen-Audio-TTS 如使用 WebSocket，请先填写兼容的 HTTP 合成地址或在后续接入实时播放。');
   const parameters = { voice: input.voiceId, format: 'mp3', ...input.parameters };
@@ -167,12 +154,54 @@ export async function synthesizeVoice(settings: TtsSettings, input: { text: stri
   return { audio: Buffer.from(await audioResponse.arrayBuffer()), mime: (audioResponse.headers.get('content-type') || 'audio/mpeg').split(';')[0] };
 }
 
+async function synthesizeSambertWithOfficialSdk(settings: TtsSettings, input: { text: string; model: string; voiceId: string; parameters: Record<string, unknown> }) {
+  const apiKey = settings.sambertApiKey || settings.apiKey;
+  if (!apiKey) throw new Error('请先配置 Sambert API Key。');
+  if (!/^wss?:\/\//i.test(settings.sambertWebsocketUrl)) throw new Error('Sambert Workspace WebSocket 地址无效。');
+  const format = String(input.parameters.format || 'wav').toLowerCase();
+  const mime = format === 'mp3' ? 'audio/mpeg' : format === 'pcm' ? 'audio/pcm' : 'audio/wav';
+  const payload = {
+    model: input.model,
+    text: input.text,
+    format,
+    sampleRate: Number(input.parameters.sample_rate) || 16000,
+    volume: Number(input.parameters.volume) || 50,
+    rate: Number(input.parameters.speech_rate) || 1,
+    pitch: Number(input.parameters.pitch_rate) || 1,
+    enableWordTimestamp: Boolean(input.parameters.enable_word_timestamp),
+    enablePhonemeTimestamp: Boolean(input.parameters.enable_phoneme_timestamp),
+  };
+  const jar = path.join(process.cwd(), 'bin', 'sambert-tts-bridge.jar');
+  return new Promise<{ audio: Buffer; mime: string }>((resolve, reject) => {
+    const child = spawn('java', ['-jar', jar], {
+      env: { ...process.env, DASHSCOPE_SAMBERT_API_KEY: apiKey, DASHSCOPE_SAMBERT_WS_URL: settings.sambertWebsocketUrl },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const stdout: Buffer[] = []; const stderr: Buffer[] = []; let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true; clearTimeout(timer);
+      if (error) reject(error); else resolve({ audio: Buffer.concat(stdout), mime });
+    };
+    const timer = setTimeout(() => { child.kill('SIGTERM'); finish(new Error('Sambert 官方 Java SDK 合成超时，请稍后重试。')); }, 90000);
+    child.stdout.on('data', (chunk: Buffer) => stdout.push(Buffer.from(chunk)));
+    child.stderr.on('data', (chunk: Buffer) => stderr.push(Buffer.from(chunk)));
+    child.on('error', (error) => finish(new Error(`无法启动 Sambert Java SDK：${error.message}`)));
+    child.on('close', (code) => {
+      if (code !== 0) {
+        const detail = Buffer.concat(stderr).toString('utf8').slice(0, 4000);
+        finish(new Error(`Sambert 官方 Java SDK 调用失败${code === null ? '' : `（退出码 ${code}）`}：${detail || '未返回具体错误'}`));
+      } else if (!stdout.length) finish(new Error('Sambert 官方 Java SDK 未返回音频数据。'));
+      else finish();
+    });
+    child.stdin.end(JSON.stringify(payload));
+  });
+}
+
 async function synthesizeQwenWebSocket(input: { text: string; model: string; voiceId: string; parameters: Record<string, unknown> }, websocketUrl: string, apiKey: string, isSambert = false) {
   if (!/^wss?:\/\//i.test(websocketUrl)) throw new Error(`${isSambert ? 'Sambert' : 'Qwen-Audio-TTS'} 的 WebSocket 地址无效。`);
   const taskId = randomBytes(16).toString('hex');
-  const parameters = isSambert
-    ? sambertParameters(input.parameters)
-    : ({ format: 'mp3', ...input.parameters, voice: input.voiceId } as Record<string, unknown>);
+  const parameters = { format: 'mp3', ...input.parameters, voice: input.voiceId } as Record<string, unknown>;
   return new Promise<{ audio: Buffer; mime: string }>((resolve, reject) => {
     const chunks: Buffer[] = []; let settled = false;
     const fail = (error: Error) => { if (settled) return; settled = true; try { socket.close(); } catch { /* ignored */ } reject(error); };

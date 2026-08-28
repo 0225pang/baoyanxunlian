@@ -572,7 +572,7 @@ async function initializeDatabase(db: Pool) {
       'bailian', process.env.DASHSCOPE_TTS_CLONE_URL || null,
       process.env.DASHSCOPE_TTS_URL || 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text2speech/speech-synthesis',
       process.env.DASHSCOPE_TTS_WS_URL || 'wss://dashscope.aliyuncs.com/api-ws/v1/inference/',
-      process.env.DASHSCOPE_SAMBERT_TTS_WS_URL || 'wss://dashscope.aliyuncs.com/api-ws/v1/inference/',
+      process.env.DASHSCOPE_SAMBERT_TTS_WS_URL || process.env.DASHSCOPE_TTS_WS_URL || 'wss://dashscope.aliyuncs.com/api-ws/v1/inference/',
       process.env.DASHSCOPE_SAMBERT_API_KEY || null,
       process.env.DASHSCOPE_API_KEY || process.env.BAILIAN_API_KEY || null,
       process.env.TTS_PUBLIC_BASE_URL || process.env.ASR_PUBLIC_BASE_URL || null,
