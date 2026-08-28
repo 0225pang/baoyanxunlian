@@ -184,6 +184,9 @@ export default function Home() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState<Page>("home");
+  const [simulationReviewId, setSimulationReviewId] = useState<number | null>(
+    null,
+  );
   const [question, setQuestion] = useState<Question | null>(null);
   const [reviewGroup, setReviewGroup] = useState<RecordGroup | null>(null);
 
@@ -806,9 +809,21 @@ export default function Home() {
           onPick={startSelectedQuestion}
         />
       )}
-      {page === "simulation" && <Simulation onBack={() => setPage("home")} />}
+      {page === "simulation" && (
+        <Simulation
+          onBack={() => setPage("home")}
+          onReview={(sessionId) => {
+            setSimulationReviewId(sessionId);
+            setPage("simulation-history");
+          }}
+        />
+      )}
       {page === "simulation-history" && (
-        <SimulationHistory onBack={() => setPage("home")} />
+        <SimulationHistory
+          onBack={() => setPage("home")}
+          initialRecordId={simulationReviewId}
+          onInitialRecordOpened={() => setSimulationReviewId(null)}
+        />
       )}
 
       {page === "history" && (
@@ -1083,7 +1098,13 @@ type SimulationAnswerDraft = {
   followupQuestion?: string;
 };
 
-function Simulation({ onBack }: { onBack: () => void }) {
+function Simulation({
+  onBack,
+  onReview,
+}: {
+  onBack: () => void;
+  onReview: (sessionId: number) => void;
+}) {
   const [templates, setTemplates] = useState<SimulationTemplate[]>([]);
   const [templateId, setTemplateId] = useState("");
   const [sessionId, setSessionId] = useState(0);
@@ -1110,6 +1131,10 @@ function Simulation({ onBack }: { onBack: () => void }) {
   const [promptCycle, setPromptCycle] = useState(0);
   const [dynamicQuestionLoading, setDynamicQuestionLoading] = useState(false);
   const [dynamicQuestionError, setDynamicQuestionError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [completedSessionId, setCompletedSessionId] = useState<number | null>(
+    null,
+  );
   const recorder = useRef<MediaRecorder | null>(null);
   const chunks = useRef<Blob[]>([]);
   const stream = useRef<MediaStream | null>(null);
@@ -1605,6 +1630,8 @@ function Simulation({ onBack }: { onBack: () => void }) {
       segmentRecordingStartedAt.current = 0;
       setReading(false);
       setDynamicQuestionError("");
+      setSubmitting(false);
+      setCompletedSessionId(null);
       setCountdown(firstDynamic ? null : 3);
       await startFullRecording();
       if (firstDynamic)
@@ -1874,7 +1901,8 @@ function Simulation({ onBack }: { onBack: () => void }) {
     onBack();
   }
   async function finish(finalDrafts = drafts) {
-    if (!sessionId) return;
+    if (!sessionId || submitting) return;
+    setSubmitting(true);
     try {
       const form = new FormData();
       form.set("elapsedSeconds", String(elapsed));
@@ -1910,10 +1938,11 @@ function Simulation({ onBack }: { onBack: () => void }) {
       });
       finishedRef.current = true;
       stream.current?.getTracks().forEach((track) => track.stop());
-      setMessage("完整模拟已保存。");
-      onBack();
+      setMessage("");
+      setCompletedSessionId(sessionId);
     } catch (error) {
       setMessage((error as Error).message);
+      setSubmitting(false);
     }
   }
   if (!sessionId)
@@ -1940,9 +1969,13 @@ function Simulation({ onBack }: { onBack: () => void }) {
   const nextDisabled = Boolean(
     countdown !== null ||
       reading ||
+      submitting ||
       followupGenerating ||
       followupResponseMissing,
   );
+  const isFinalSubmission =
+    stepIndex + 1 === steps.length &&
+    (!current.allowFollowup || followupRound >= followupLimit);
   const nextHint = followupGenerating
     ? "老师正在结合本题与刚才的作答生成下一轮追问，请稍候。"
     : followupResponseMissing
@@ -2108,20 +2141,45 @@ function Simulation({ onBack }: { onBack: () => void }) {
               <small>{nextHint}</small>
             </div>
             <button disabled={nextDisabled} onClick={() => void next()}>
-              {current.allowFollowup && followupRound < followupLimit
+              {submitting
+                ? "正在提交记录…"
+                : current.allowFollowup && followupRound < followupLimit
                 ? followup
                   ? `完成本次追问并生成下一轮（${followupRound + 1}/${followupLimit}） →`
                   : `完成回答并生成老师追问（1/${followupLimit}） →`
-                : followup
-                  ? stepIndex + 1 === steps.length
-                    ? "完成最后一轮追问并保存模拟 →"
-                    : "完成最后一轮追问并进入下一环节 →"
-                  : stepIndex + 1 === steps.length
-                    ? "完成模拟并保存 →"
+                : isFinalSubmission
+                  ? "结束本次回答并提交记录"
+                  : followup
+                    ? "完成最后一轮追问并进入下一环节 →"
                     : "保存本段并进入下一环节 →"}
             </button>
           </div>
         </>
+      )}
+      {completedSessionId && (
+        <div className="simulation-complete-backdrop" role="presentation">
+          <section
+            className="simulation-complete-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="simulation-complete-title"
+            aria-describedby="simulation-complete-description"
+          >
+            <div className="simulation-complete-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none">
+                <path d="m5 12 4.2 4.2L19.5 6" />
+              </svg>
+            </div>
+            <span className="section-kicker">SIMULATION SUBMITTED</span>
+            <h2 id="simulation-complete-title">本次模拟已成功提交</h2>
+            <p id="simulation-complete-description">
+              您已成功提交，现在可去真实模拟记录界面查看并复盘。
+            </p>
+            <button autoFocus onClick={() => onReview(completedSessionId)}>
+              确认，查看本次复盘
+            </button>
+          </section>
+        </div>
       )}
     </main>
   );
