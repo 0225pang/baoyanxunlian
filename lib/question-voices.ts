@@ -10,6 +10,7 @@ export type TtsSettings = {
   cloneUrl: string;
   synthesisUrl: string;
   websocketUrl: string;
+  sambertWebsocketUrl: string;
   apiKey: string;
   publicBaseUrl: string;
   cloneModel: string;
@@ -54,13 +55,14 @@ function findString(value: unknown, keys: string[]): string {
 
 export async function getTtsSettings(): Promise<TtsSettings> {
   const rows = await query<RowDataPacket[]>(`SELECT provider, clone_url AS cloneUrl, synthesis_url AS synthesisUrl,
-    websocket_url AS websocketUrl, api_key AS apiKey, public_base_url AS publicBaseUrl,
+    websocket_url AS websocketUrl, sambert_websocket_url AS sambertWebsocketUrl, api_key AS apiKey, public_base_url AS publicBaseUrl,
     clone_model AS cloneModel, clone_target_model AS cloneTargetModel, default_model AS defaultModel
     FROM tts_settings WHERE id = 1 LIMIT 1`);
   const row = rows[0] || {};
   return {
     provider: clean(row.provider || 'bailian'),
     cloneUrl: clean(row.cloneUrl), synthesisUrl: clean(row.synthesisUrl), websocketUrl: clean(row.websocketUrl),
+    sambertWebsocketUrl: clean(row.sambertWebsocketUrl || 'wss://dashscope.aliyuncs.com/api-ws/v1/inference'),
     apiKey: String(row.apiKey || '').trim(), publicBaseUrl: clean(row.publicBaseUrl),
     cloneModel: clean(row.cloneModel || 'voice-enrollment'),
     cloneTargetModel: clean(row.cloneTargetModel || 'qwen-audio-3.0-tts-flash'),
@@ -122,11 +124,13 @@ export async function createClonedVoice(settings: TtsSettings, prefix: string, u
 
 export async function synthesizeVoice(settings: TtsSettings, input: { text: string; model: string; voiceId: string; parameters: Record<string, unknown> }) {
   if (!settings.apiKey) throw new Error('请先配置百炼 API Key。');
-  // Qwen-Audio-TTS and Sambert both use the Model Studio workspace
-  // SpeechSynthesizer WebSocket API. Do not send Sambert to the legacy HTTP
-  // endpoint: it responds with the misleading "url error".
-  if (settings.websocketUrl) {
-    return synthesizeQwenWebSocket(settings, input);
+  const isSambert = input.model.startsWith('sambert-');
+  // Sambert system voices are routed by DashScope's public endpoint while
+  // Qwen cloned voices require the workspace endpoint. The SDK uses only the
+  // Sambert model name; it does not accept a cloned Qwen voice ID.
+  const websocketUrl = isSambert ? settings.sambertWebsocketUrl : settings.websocketUrl;
+  if (websocketUrl) {
+    return synthesizeQwenWebSocket(settings, input, websocketUrl, isSambert);
   }
   if (!settings.synthesisUrl) throw new Error('请先配置语音合成 HTTP API 地址。Qwen-Audio-TTS 如使用 WebSocket，请先填写兼容的 HTTP 合成地址或在后续接入实时播放。');
   const parameters = { voice: input.voiceId, format: 'mp3', ...input.parameters };
@@ -145,17 +149,18 @@ export async function synthesizeVoice(settings: TtsSettings, input: { text: stri
   return { audio: Buffer.from(await audioResponse.arrayBuffer()), mime: (audioResponse.headers.get('content-type') || 'audio/mpeg').split(';')[0] };
 }
 
-async function synthesizeQwenWebSocket(settings: TtsSettings, input: { text: string; model: string; voiceId: string; parameters: Record<string, unknown> }) {
-  if (!/^wss?:\/\//i.test(settings.websocketUrl)) throw new Error('Qwen-Audio-TTS 的 WebSocket 地址无效。');
+async function synthesizeQwenWebSocket(settings: TtsSettings, input: { text: string; model: string; voiceId: string; parameters: Record<string, unknown> }, websocketUrl: string, isSambert = false) {
+  if (!/^wss?:\/\//i.test(websocketUrl)) throw new Error(`${isSambert ? 'Sambert' : 'Qwen-Audio-TTS'} 的 WebSocket 地址无效。`);
   const taskId = randomBytes(16).toString('hex');
-  const parameters = { voice: input.voiceId, format: 'mp3', ...input.parameters };
+  const parameters = { format: 'mp3', ...input.parameters } as Record<string, unknown>;
+  if (!isSambert) parameters.voice = input.voiceId;
   return new Promise<{ audio: Buffer; mime: string }>((resolve, reject) => {
     const chunks: Buffer[] = []; let settled = false;
     const fail = (error: Error) => { if (settled) return; settled = true; try { socket.close(); } catch { /* ignored */ } reject(error); };
     const succeed = () => { if (settled) return; settled = true; try { socket.close(); } catch { /* ignored */ } if (!chunks.length) { reject(new Error('Qwen-Audio-TTS 未返回音频数据，请检查模型、voice ID 与 WebSocket 配置。')); return; } resolve({ audio: Buffer.concat(chunks), mime: 'audio/mpeg' }); };
     // Keep the spelling aligned with the official Node WebSocket example.
     // Some regional inference gateways reject the initial upgrade otherwise.
-    const socket = new WebSocket(settings.websocketUrl, { headers: { Authorization: `bearer ${settings.apiKey}` } });
+    const socket = new WebSocket(websocketUrl, { headers: { Authorization: `bearer ${settings.apiKey}` } });
     const timer = setTimeout(() => fail(new Error('Qwen-Audio-TTS 合成超时，请稍后重试。')), 60000);
     socket.on('open', () => {
       // The Qwen duplex endpoint acknowledges run-task before it accepts

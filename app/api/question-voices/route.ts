@@ -14,11 +14,6 @@ function parseParameters(value: unknown) {
   try { return JSON.parse(String(value)); } catch { return {}; }
 }
 
-function sambertVoiceForModel(model: string) {
-  const matched = model.match(/^sambert-([a-z0-9_-]+)-v\d+$/i);
-  return matched?.[1] || '';
-}
-
 async function readState() {
   const settings = await getTtsSettings();
   const questions = await query<RowDataPacket[]>(`SELECT q.id, q.content, t.name AS typeName FROM questions q
@@ -44,14 +39,14 @@ export async function PATCH(request: Request) {
     if (!body.settings) return Response.json(await readState());
     const current = await getTtsSettings(); const value = body.settings;
     const provider = clean(value.provider || current.provider, 50) || 'bailian';
-    const cloneUrl = clean(value.cloneUrl, 500); const synthesisUrl = clean(value.synthesisUrl, 500); const websocketUrl = clean(value.websocketUrl, 500); const publicBaseUrl = clean(value.publicBaseUrl, 500).replace(/\/+$/, '');
+    const cloneUrl = clean(value.cloneUrl, 500); const synthesisUrl = clean(value.synthesisUrl, 500); const websocketUrl = clean(value.websocketUrl, 500); const sambertWebsocketUrl = clean(value.sambertWebsocketUrl, 500); const publicBaseUrl = clean(value.publicBaseUrl, 500).replace(/\/+$/, '');
     const cloneModel = clean(value.cloneModel || current.cloneModel, 150) || 'voice-enrollment';
     const cloneTargetModel = clean(value.cloneTargetModel || current.cloneTargetModel, 150) || 'qwen-audio-3.0-tts-flash';
     const defaultModel = clean(value.defaultModel || current.defaultModel, 150) || 'qwen-audio-3.0-tts-flash';
     const apiKey = clean(value.apiKey, 1000);
-    if (![cloneUrl, synthesisUrl, websocketUrl, publicBaseUrl].every(validUrl)) return Response.json({ error: 'API 地址必须以 http(s):// 或 ws(s):// 开头。' }, { status: 400 });
-    if (apiKey) await execute('UPDATE tts_settings SET provider=?, clone_url=?, synthesis_url=?, websocket_url=?, api_key=?, public_base_url=?, clone_model=?, clone_target_model=?, default_model=?, updated_at=CURRENT_TIMESTAMP WHERE id=1', [provider, cloneUrl || null, synthesisUrl || null, websocketUrl || null, apiKey, publicBaseUrl || null, cloneModel, cloneTargetModel, defaultModel]);
-    else await execute('UPDATE tts_settings SET provider=?, clone_url=?, synthesis_url=?, websocket_url=?, public_base_url=?, clone_model=?, clone_target_model=?, default_model=?, updated_at=CURRENT_TIMESTAMP WHERE id=1', [provider, cloneUrl || null, synthesisUrl || null, websocketUrl || null, publicBaseUrl || null, cloneModel, cloneTargetModel, defaultModel]);
+    if (![cloneUrl, synthesisUrl, websocketUrl, sambertWebsocketUrl, publicBaseUrl].every(validUrl)) return Response.json({ error: 'API 地址必须以 http(s):// 或 ws(s):// 开头。' }, { status: 400 });
+    if (apiKey) await execute('UPDATE tts_settings SET provider=?, clone_url=?, synthesis_url=?, websocket_url=?, sambert_websocket_url=?, api_key=?, public_base_url=?, clone_model=?, clone_target_model=?, default_model=?, updated_at=CURRENT_TIMESTAMP WHERE id=1', [provider, cloneUrl || null, synthesisUrl || null, websocketUrl || null, sambertWebsocketUrl || null, apiKey, publicBaseUrl || null, cloneModel, cloneTargetModel, defaultModel]);
+    else await execute('UPDATE tts_settings SET provider=?, clone_url=?, synthesis_url=?, websocket_url=?, sambert_websocket_url=?, public_base_url=?, clone_model=?, clone_target_model=?, default_model=?, updated_at=CURRENT_TIMESTAMP WHERE id=1', [provider, cloneUrl || null, synthesisUrl || null, websocketUrl || null, sambertWebsocketUrl || null, publicBaseUrl || null, cloneModel, cloneTargetModel, defaultModel]);
     return Response.json(await readState());
   } catch (error) {
     console.error('Question voice settings update failed:', error);
@@ -111,10 +106,10 @@ export async function POST(request: Request) {
     if (body.action !== 'synthesize') return Response.json({ error: '不支持的语音操作。' }, { status: 400 });
     const questionId = Number(body.questionId); const name = clean(body.name, 160) || '生成语音';
     const settings = await getTtsSettings(); const model = clean(body.model || settings.defaultModel, 150);
-    // Sambert model names identify their built-in speaker. Always derive this
-    // value on the server so a cloned Qwen voice ID cannot leak into Sambert.
-    const voiceId = model.startsWith('sambert-') ? sambertVoiceForModel(model) : clean(body.voiceId, 255);
-    if (!Number.isInteger(questionId) || questionId < 1 || !voiceId) return Response.json({ error: model.startsWith('sambert-') ? '无法从 Sambert 模型名识别预设音色，请使用 sambert-<音色名>-v1 格式。' : '请选择要使用的复刻 voice ID。' }, { status: 400 });
+    // Sambert SDK only accepts model + text. Its model already selects the
+    // built-in speaker; a cloned Qwen voice ID is neither needed nor sent.
+    const voiceId = model.startsWith('sambert-') ? '' : clean(body.voiceId, 255);
+    if (!Number.isInteger(questionId) || questionId < 1 || (!model.startsWith('sambert-') && !voiceId)) return Response.json({ error: model.startsWith('sambert-') ? '请选择有效的 Sambert 模型。' : '请选择要使用的复刻 voice ID。' }, { status: 400 });
     const rows = await query<RowDataPacket[]>('SELECT content FROM questions WHERE id=? LIMIT 1', [questionId]); const question = rows[0];
     if (!question) return Response.json({ error: '所选题目不存在。' }, { status: 404 });
     const parameters = body.parameters && typeof body.parameters === 'object' ? body.parameters : {};

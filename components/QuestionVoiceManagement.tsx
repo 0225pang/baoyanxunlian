@@ -3,7 +3,7 @@
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
 
-type Settings = { publicBaseUrl: string; cloneUrl: string; websocketUrl: string; synthesisUrl: string; apiKey?: string; apiKeySet?: boolean; apiKeyPreview?: string };
+type Settings = { publicBaseUrl: string; cloneUrl: string; websocketUrl: string; sambertWebsocketUrl: string; synthesisUrl: string; apiKey?: string; apiKeySet?: boolean; apiKeyPreview?: string };
 type Question = { id: number; content: string; typeName: string };
 type Voice = { id: number; questionId: number | null; name: string; kind: 'custom' | 'generated'; status: 'processing' | 'ready' | 'failed'; model?: string; voiceId?: string; hasSource?: boolean; hasOutput: boolean; error?: string };
 type VoiceData = { settings: Settings; questions: Question[]; voices: Voice[] };
@@ -25,14 +25,6 @@ async function requestJson(url: string, options?: RequestInit) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || '请求失败，请稍后重试。');
   return data;
-}
-
-function presetForModel(model: string) {
-  const known = PRESET_MODELS.find((item) => item.model === model);
-  if (known) return known.voice;
-  // New Sambert models conventionally encode the speaker in their model name:
-  // sambert-zhida-v1 -> zhida. No second “system voice” field is needed.
-  return model.match(/^sambert-([a-z0-9_-]+)-v\d+$/i)?.[1] || '';
 }
 
 export default function QuestionVoiceManagement() {
@@ -71,10 +63,9 @@ export default function QuestionVoiceManagement() {
   const currentAudio = useMemo(() => data?.voices.filter((voice) => voice.kind === 'generated' && voice.questionId === Number(questionId)) || [], [data, questionId]);
   const characterCount = useMemo(() => data?.questions.reduce((total, question) => total + question.content.length, 0) || 0, [data]);
   const activePresetModel = presetModel === '__custom__' ? customPresetModel.trim() : presetModel;
-  const automaticPresetVoice = presetForModel(activePresetModel);
-  const selectedVoiceId = sourceMode === 'clone' ? cloneVoiceId : automaticPresetVoice;
+  const selectedVoiceId = sourceMode === 'clone' ? cloneVoiceId : '';
   const selectedModel = sourceMode === 'clone' ? 'qwen-audio-3.0-tts-flash' : activePresetModel;
-  const canGenerate = Boolean(questionId && selectedModel && selectedVoiceId && !busy);
+  const canGenerate = Boolean(questionId && selectedModel && (sourceMode === 'preset' || selectedVoiceId) && !busy);
 
   function buildPayload(id: number) {
     let additionalParameters: Record<string, unknown>;
@@ -106,7 +97,7 @@ export default function QuestionVoiceManagement() {
   }
 
   async function generateAll() {
-    if (!data || !selectedVoiceId) return;
+    if (!data || (sourceMode === 'clone' && !selectedVoiceId)) return;
     if (!confirm(`将处理 ${data.questions.length} 道题，约 ${characterCount} 字，预估约 ¥${(characterCount / 10000).toFixed(2)}。已有相同风格配音会自动跳过。`)) return;
     cancelBatchRef.current = false; setBusy(true);
     try {
@@ -168,7 +159,8 @@ export default function QuestionVoiceManagement() {
       <section className="voice-settings-card"><div className="voice-settings-grid">
         <label>公网访问地址<input value={settings.publicBaseUrl} onChange={(event) => setSettings({ ...settings, publicBaseUrl: event.target.value })} placeholder="http://服务器IP:端口" /></label>
         <label>声音复刻 REST API<input value={settings.cloneUrl} onChange={(event) => setSettings({ ...settings, cloneUrl: event.target.value })} placeholder="https://{WorkspaceId}.cn-beijing.../customization" /></label>
-        <label className="wide">百炼 Workspace WebSocket（Qwen 与 Sambert 均使用）<input value={settings.websocketUrl} onChange={(event) => setSettings({ ...settings, websocketUrl: event.target.value })} placeholder="wss://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference" /></label>
+        <label className="wide">Qwen TTS Workspace WebSocket（复刻音色）<input value={settings.websocketUrl} onChange={(event) => setSettings({ ...settings, websocketUrl: event.target.value })} placeholder="wss://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference" /></label>
+        <label className="wide">Sambert WebSocket（预设音色）<input value={settings.sambertWebsocketUrl} onChange={(event) => setSettings({ ...settings, sambertWebsocketUrl: event.target.value })} placeholder="wss://dashscope.aliyuncs.com/api-ws/v1/inference" /></label>
         <label className="wide">旧版 HTTP 合成地址（可留空，当前优先使用上方 WebSocket）<input value={settings.synthesisUrl} onChange={(event) => setSettings({ ...settings, synthesisUrl: event.target.value })} /></label>
         <label>百炼 API Key<input type="password" value={settings.apiKey || ''} placeholder={settings.apiKeySet ? `已保存：${settings.apiKeyPreview || '已隐藏'}` : '输入后保存'} onChange={(event) => setSettings({ ...settings, apiKey: event.target.value })} /></label>
       </div><button className="voice-save" onClick={() => void saveSettings()} disabled={busy}>保存配置</button></section>
@@ -182,7 +174,7 @@ export default function QuestionVoiceManagement() {
       {sourceMode === 'clone' ? <label>选择已复刻的 voice ID<select value={cloneVoiceId} onChange={(event) => setCloneVoiceId(event.target.value)}><option value="">请选择复刻音色</option>{clonedVoices.map((voice) => <option key={voice.id} value={voice.voiceId}>{voice.name} · {voice.voiceId}</option>)}</select></label> : <>
         <label>Sambert 预设模型<select value={presetModel} onChange={(event) => setPresetModel(event.target.value)}>{PRESET_MODELS.map((preset) => <option key={preset.model} value={preset.model}>{preset.label}</option>)}<option value="__custom__">其他已开通的 Sambert 模型…</option></select></label>
         {presetModel === '__custom__' && <label>Sambert 模型名称<input value={customPresetModel} onChange={(event) => setCustomPresetModel(event.target.value)} placeholder="例如 sambert-xxx-v1" /></label>}
-        <small className="voice-helper">系统自动映射音色：<code>{activePresetModel || 'sambert-xxx-v1'}</code> → <code>{automaticPresetVoice || 'xxx'}</code>。不需要，也不能填写复刻 voice ID。</small>
+        <small className="voice-helper">Sambert 的模型名已包含预设发音人。系统只向百炼提交模型名和文本，不会发送或复用任何复刻 voice ID。</small>
       </>}
       </section>
 
@@ -196,7 +188,7 @@ export default function QuestionVoiceManagement() {
       <section className="voice-action-card generate"><h3>生成配音</h3>
         <label>题目<select value={questionId} onChange={(event) => setQuestionId(event.target.value)}>{data.questions.map((question) => <option key={question.id} value={question.id}>{question.typeName} · {question.content.slice(0, 42)}</option>)}</select></label>
         <button type="button" disabled={!canGenerate} onClick={() => void generateCurrent()}>为当前题目生成</button>
-        {busy ? <button type="button" className="voice-batch" onClick={() => { cancelBatchRef.current = true; setMessage('将在当前题完成后取消批量任务。'); }}>取消批量配音</button> : <button type="button" className="voice-batch" disabled={!selectedVoiceId} onClick={() => void generateAll()}>一键为全部题目配音</button>}
+        {busy ? <button type="button" className="voice-batch" onClick={() => { cancelBatchRef.current = true; setMessage('将在当前题完成后取消批量任务。'); }}>取消批量配音</button> : <button type="button" className="voice-batch" disabled={sourceMode === 'clone' && !selectedVoiceId} onClick={() => void generateAll()}>一键为全部题目配音</button>}
         <small>{data.questions.length} 道题，约 {characterCount} 字；按 ¥1 / 1 万字估算约 ¥{(characterCount / 10000).toFixed(2)}。</small>
       </section>
     </section>
