@@ -16,9 +16,10 @@ export async function GET(request: Request) {
     const totalRows = await query(`SELECT COUNT(*) AS total FROM questions q WHERE ${where.join(' AND ')}`, values);
     const total = Number((totalRows[0] as { total: number }).total);
     const questions = await query(`SELECT q.id, q.type_id AS typeId, t.code AS typeCode, t.name AS category,
-      q.content, q.subcategory, (q.answer IS NOT NULL AND CHAR_LENGTH(TRIM(q.answer)) > 0) AS hasAnswer
+      q.content, q.subcategory, (q.answer IS NOT NULL AND CHAR_LENGTH(TRIM(q.answer)) > 0) AS hasAnswer,
+      (SELECT v.id FROM question_voices v WHERE v.question_id=q.id AND v.kind='generated' AND v.status='ready' AND v.output_path IS NOT NULL ORDER BY RAND() LIMIT 1) AS questionVoiceId
       FROM questions q JOIN question_types t ON t.id = q.type_id
       WHERE ${where.join(' AND ')} ORDER BY q.updated_at DESC, q.id DESC LIMIT ? OFFSET ?`, [...values, pageSize, (page - 1) * pageSize]);
-    return Response.json({ questions, total, page, totalPages: Math.max(1, Math.ceil(total / pageSize)) });
+    return Response.json({ questions: questions.map((item) => ({ ...item, questionVoiceUrl: item.questionVoiceId ? `/api/question-voices/${Number(item.questionVoiceId)}/audio?kind=output` : null })), total, page, totalPages: Math.max(1, Math.ceil(total / pageSize)) });
   } catch (error) { return apiError(error); }
 }
