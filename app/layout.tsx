@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: '研路｜保研面试训练系统',
+  title: '小鱼食品保研| 保研面试训练系统',
   description: '保研面试随机抽题、录音作答与历史复盘系统',
 };
 

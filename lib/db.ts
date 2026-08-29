@@ -69,6 +69,7 @@ const schema = [
     auto_record TINYINT(1) NOT NULL DEFAULT 1,
     avoid_repeated TINYINT(1) NOT NULL DEFAULT 0,
     read_question TINYINT(1) NOT NULL DEFAULT 1,
+    default_voice_id BIGINT UNSIGNED NULL,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     CONSTRAINT fk_settings_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
@@ -463,6 +464,9 @@ async function initializeDatabase(db: Pool) {
   }
   if (!(await hasColumn(db, 'user_settings', 'read_question'))) {
     await db.query('ALTER TABLE user_settings ADD COLUMN read_question TINYINT(1) NOT NULL DEFAULT 1');
+  }
+  if (!(await hasColumn(db, 'user_settings', 'default_voice_id'))) {
+    await db.query('ALTER TABLE user_settings ADD COLUMN default_voice_id BIGINT UNSIGNED NULL AFTER read_question');
   }
   await db.query('ALTER TABLE user_settings MODIFY COLUMN read_question TINYINT(1) NOT NULL DEFAULT 1');
   const [readQuestionMigration] = await db.query<ResultSetHeader>('INSERT IGNORE INTO app_migrations (name) VALUES (?)', ['read_question_default_enabled']);

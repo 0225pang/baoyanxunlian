@@ -548,8 +548,10 @@ export default function Home() {
         <button className="logo" onClick={() => setPage("home")}>
           <img
             className="logo-image"
-            src="/logo.svg?v=3"
+            src="/logo2.0.png?v=1"
             alt="小鱼食品保研"
+            width={226}
+            height={75}
             loading="eager"
           />
           <span className="logo-training">
@@ -4037,6 +4039,9 @@ function Settings({
     null,
   );
   const [copiedBrowserUrl, setCopiedBrowserUrl] = useState(false);
+  const [voicePreviews, setVoicePreviews] = useState<Array<{ id: number; name: string; provider: string; model: string; audioUrl: string }>>([]);
+  const [defaultVoiceId, setDefaultVoiceId] = useState<number | null>(null);
+  const [voicePreviewLoading, setVoicePreviewLoading] = useState(true);
   const browserUrls = {
     chrome: "chrome://flags/#unsafely-treat-insecure-origin-as-secure",
     edge: "edge://flags/#unsafely-treat-insecure-origin-as-secure",
@@ -4044,6 +4049,15 @@ function Settings({
 
   useEffect(() => {
     setOrigin(window.location.origin);
+  }, []);
+  useEffect(() => {
+    jsonFetch("/api/settings")
+      .then((data) => {
+        setVoicePreviews(data.voicePreviews || []);
+        setDefaultVoiceId(data.settings?.defaultVoiceId == null ? null : Number(data.settings.defaultVoiceId));
+      })
+      .catch(() => undefined)
+      .finally(() => setVoicePreviewLoading(false));
   }, []);
   useEffect(() => {
     if (!guideOpen) return;
@@ -4070,6 +4084,14 @@ function Settings({
     });
     onChange(nextAutoRecord, nextAvoidRepeated, nextReadQuestion);
     setSaved("设置已保存");
+  }
+  async function saveVoicePreview() {
+    await jsonFetch("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ autoRecord, avoidRepeated, readQuestion, defaultVoiceId }),
+    });
+    setSaved("试听声音设置已保存");
   }
   async function copyOrigin() {
     if (!origin) return;
@@ -4160,6 +4182,15 @@ function Settings({
         >
           <i />
         </button>
+      </section>
+      <section className="setting-card voice-preview-setting">
+        <div>
+          <h2>设置声音试听</h2>
+          <p>选择管理员预先生成的声音，在这里直接试听。此设置只影响当前账号的试听偏好，不会改变题目已有配音。</p>
+          {voicePreviewLoading ? <small className="voice-setting-hint">正在加载可试听声音…</small> : voicePreviews.length === 0 ? <small className="voice-setting-hint">管理员尚未生成试听声音。</small> : <label className="voice-preview-select">默认试听声音<select value={defaultVoiceId == null ? "" : String(defaultVoiceId)} onChange={(event) => setDefaultVoiceId(event.target.value ? Number(event.target.value) : null)}><option value="">不设置</option>{voicePreviews.map((voice) => <option key={voice.id} value={voice.id}>{voice.name} · {voice.provider === "baidu" ? "百度" : "百炼"}</option>)}</select></label>}
+        </div>
+        {defaultVoiceId != null && voicePreviews.find((voice) => voice.id === defaultVoiceId) && <audio className="settings-preview-audio" controls preload="none" src={voicePreviews.find((voice) => voice.id === defaultVoiceId)?.audioUrl} />}
+        <button type="button" className="settings-preview-save" disabled={voicePreviewLoading} onClick={() => void saveVoicePreview()}>保存试听设置</button>
       </section>
       {saved && <p className="saved">✓ {saved}</p>}
       <section className="permission-card">
