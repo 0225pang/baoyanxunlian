@@ -49,7 +49,10 @@ export async function PUT(request: Request) {
     if (defaultVoiceId !== null) {
       if (!Number.isInteger(defaultVoiceId) || defaultVoiceId < 1) return Response.json({ error: '试听音色选择无效。' }, { status: 400 });
       const voiceRows = await query("SELECT id FROM question_voices WHERE id=? AND kind='settings_preview' AND status='ready' AND output_path IS NOT NULL LIMIT 1", [defaultVoiceId]);
-      if (!voiceRows.length) return Response.json({ error: '所选试听音色不存在或尚未生成。' }, { status: 400 });
+      if (!voiceRows.length) {
+        if (hasVoiceSelection) return Response.json({ error: '所选试听音色不存在或尚未生成。' }, { status: 400 });
+        defaultVoiceId = null;
+      }
     }
 
     await execute(
