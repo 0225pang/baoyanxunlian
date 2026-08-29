@@ -2882,6 +2882,17 @@ function QuestionBank() {
   function toggleDuplicate(id: number, checked: boolean) {
     setDuplicateSelected((current) => checked ? Array.from(new Set([...current, id])) : current.filter((item) => item !== id));
   }
+  function selectDeletableDuplicatesWithoutVoice() {
+    const ids = duplicateGroups.flatMap((group) => {
+      const withoutVoice = group.questions.filter((item) => item.voiceCount === 0);
+      // Every duplicate group must retain at least one question. If none has
+      // a generated voice, retain the first one; otherwise voices are kept.
+      return withoutVoice.length === group.questions.length
+        ? withoutVoice.slice(1).map((item) => item.id)
+        : withoutVoice.map((item) => item.id);
+    });
+    setDuplicateSelected(ids);
+  }
   async function deleteDuplicateIds(ids: number[], prompt: string) {
     if (!ids.length) return;
     await remove(ids, prompt);
@@ -3051,6 +3062,7 @@ function QuestionBank() {
   function isDuplicateKeeper(group: DuplicateGroup, item: DuplicateQuestion) { return duplicateKeeperFor(group) === item.id; }
   function duplicateKeepButtonClick(group: DuplicateGroup) { duplicateDeleteRemaining(group); }
   function duplicateBatchClick() { duplicateDeleteBulk(); }
+  function duplicateSelectWithoutVoiceClick() { selectDeletableDuplicatesWithoutVoice(); }
   function duplicateRefreshClick() { duplicateRefresh(); }
   function importConfirmClick() { importConfirm(); }
   function importPreviewCancelClick() { importConfirmCancel(); }
@@ -3373,8 +3385,10 @@ function QuestionBank() {
             <p>按题干内容（忽略首尾及连续空格）分组。先选一条保留，再删除其他重复项；也可跨分组勾选后批量删除。</p>
             <div className="duplicate-modal-actions">
               <button type="button" className="secondary-action" disabled={duplicatesLoading} onClick={duplicateRefreshClick}>重新检查</button>
+              <button type="button" className="secondary-action duplicate-smart-select" disabled={duplicatesLoading || !duplicateGroups.length} onClick={duplicateSelectWithoutVoiceClick}>一键选中无配音可删项</button>
               <button type="button" className="danger-action" disabled={isDuplicateBulkDisabled()} onClick={duplicateBatchClick}>{duplicateBulkText()}</button>
             </div>
+            <small className="duplicate-selection-hint">会跳过已有题目配音的条目；若一组全部没有配音，会自动保留其中一条。</small>
             <div className="duplicate-groups">
               {!duplicateGroupsPresent() ? <div className="duplicate-empty"><strong>{duplicateEmptyText()}</strong><small>{duplicateEmptyHint()}</small></div> : duplicateGroups.map((group) => (
                 <article key={group.key} className="duplicate-group">
