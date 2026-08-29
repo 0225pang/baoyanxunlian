@@ -30,7 +30,8 @@ type SimulationTemplate = {
   followupPrompt?: string;
   isActive?: boolean;
 };
-type DynamicTtsConfig = { provider: "browser" | "baidu" | "bailian"; model?: string; per?: number; rate?: number; pitch?: number; volume?: number };
+type DynamicTtsConfig = { provider: "browser" | "baidu" | "bailian"; sourceMode?: "sambert" | "clone"; model?: string; voiceId?: string; per?: number; rate?: number; pitch?: number; volume?: number };
+type CloneVoice = { id: number; name: string; model: string; voiceId: string | null; kind: string; provider: string; status: string };
 type RealtimeConfig = {
   provider: string;
   websocketUrl: string;
@@ -61,25 +62,28 @@ function parseModules(value: SimulationTemplate["modules"]) {
   }
 }
 function parseDynamicTts(value: SimulationTemplate["dynamicTtsConfig"]): DynamicTtsConfig {
-  try { const item = typeof value === "string" ? JSON.parse(value || "{}") : value || {}; return { provider: ["browser", "baidu", "bailian"].includes(String(item.provider)) ? item.provider : "browser", model: String(item.model || "sambert-zhida-v1"), per: Number(item.per) || 1, rate: Number(item.rate) || 1, pitch: Number(item.pitch) || 1, volume: Number(item.volume) || 50 }; } catch { return { provider: "browser", model: "sambert-zhida-v1", per: 1, rate: 1, pitch: 1, volume: 50 }; }
+  try { const item = typeof value === "string" ? JSON.parse(value || "{}") : value || {}; const sourceMode = item.sourceMode === "clone" ? "clone" : "sambert"; return { provider: ["browser", "baidu", "bailian"].includes(String(item.provider)) ? item.provider : "browser", sourceMode, model: String(item.model || (sourceMode === "clone" ? "qwen-audio-3.0-tts-flash" : "sambert-zhida-v1")), voiceId: String(item.voiceId || ""), per: Number(item.per) || 1, rate: Number(item.rate) || 1, pitch: Number(item.pitch) || 1, volume: Number(item.volume) || 50 }; } catch { return { provider: "browser", sourceMode: "sambert", model: "sambert-zhida-v1", voiceId: "", per: 1, rate: 1, pitch: 1, volume: 50 }; }
 }
 
 export default function SimulationConfig() {
   const [templates, setTemplates] = useState<SimulationTemplate[]>([]);
   const [types, setTypes] = useState<QuestionType[]>([]);
+  const [cloneVoices, setCloneVoices] = useState<CloneVoice[]>([]);
   const [selected, setSelected] = useState<SimulationTemplate | null>(null);
   const [realtime, setRealtime] = useState<RealtimeConfig | null>(null);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
   const load = useCallback(async () => {
     try {
-      const [simulationData, typeData] = await Promise.all([
+      const [simulationData, typeData, voiceData] = await Promise.all([
         requestJson("/api/simulations/config"),
         requestJson("/api/question-types"),
+        requestJson("/api/question-voices"),
       ]);
       const items = simulationData.templates || [];
       setTemplates(items);
       setTypes(typeData.types || []);
+      setCloneVoices((voiceData.voices || []).filter((voice: CloneVoice) => voice.provider === "bailian" && voice.kind === "custom" && voice.status === "ready" && voice.voiceId));
       setSelected((current) =>
         current?.id &&
         items.some((item: SimulationTemplate) => item.id === current.id)
@@ -187,7 +191,7 @@ export default function SimulationConfig() {
         },
       ],
       followupPrompt: DEFAULT_FOLLOWUP_PROMPT,
-      dynamicTtsConfig: { provider: "browser", model: "sambert-zhida-v1", per: 1, rate: 1, pitch: 1, volume: 50 },
+      dynamicTtsConfig: { provider: "browser", sourceMode: "sambert", model: "sambert-zhida-v1", voiceId: "", per: 1, rate: 1, pitch: 1, volume: 50 },
       isActive: true,
     });
   }
@@ -388,8 +392,15 @@ export default function SimulationConfig() {
               </label>
               <section className="dynamic-tts-config">
                 <div><b>现场 AI 题目朗读</b><small>适用于自由交流和老师追问等现场生成的问题；生成的音频会随本次模拟记录保存。</small></div>
-                <label>朗读来源<select value={dynamicTts.provider} onChange={(event) => updateDynamicTts({ provider: event.target.value as DynamicTtsConfig["provider"] })}><option value="browser">浏览器朗读（不调用 TTS API）</option><option value="bailian">百炼 · Sambert 预设音色</option><option value="baidu">百度短文本合成</option></select></label>
-                {dynamicTts.provider === "bailian" && <><label>Sambert 模型<input value={dynamicTts.model || "sambert-zhida-v1"} onChange={(event) => updateDynamicTts({ model: event.target.value })} placeholder="sambert-zhida-v1" /></label><label>语速<input type="number" min="0.5" max="2" step="0.05" value={dynamicTts.rate ?? 1} onChange={(event) => updateDynamicTts({ rate: Number(event.target.value) || 1 })} /></label><label>音调<input type="number" min="0.5" max="2" step="0.05" value={dynamicTts.pitch ?? 1} onChange={(event) => updateDynamicTts({ pitch: Number(event.target.value) || 1 })} /></label></>}
+                <label>朗读来源<select value={dynamicTts.provider} onChange={(event) => updateDynamicTts({ provider: event.target.value as DynamicTtsConfig["provider"] })}><option value="browser">浏览器朗读（不调用 TTS API）</option><option value="bailian">百炼语音合成</option><option value="baidu">百度短文本合成</option></select></label>
+                {dynamicTts.provider === "bailian" && <>
+                  <label>百炼音色类型<select value={dynamicTts.sourceMode || "sambert"} onChange={(event) => { const sourceMode = event.target.value as "sambert" | "clone"; const voice = cloneVoices[0]; updateDynamicTts(sourceMode === "clone" ? { sourceMode, model: voice?.model || "qwen-audio-3.0-tts-flash", voiceId: voice?.voiceId || "" } : { sourceMode, model: "sambert-zhida-v1", voiceId: "" }); }}><option value="sambert">Sambert 预设音色</option><option value="clone">已复刻音色</option></select></label>
+                  {dynamicTts.sourceMode === "clone" ? <>
+                    <label>复刻音色<select value={dynamicTts.voiceId || ""} onChange={(event) => { const voice = cloneVoices.find((item) => item.voiceId === event.target.value); updateDynamicTts({ voiceId: event.target.value, model: voice?.model || dynamicTts.model || "qwen-audio-3.0-tts-flash" }); }}><option value="">请选择已复刻音色</option>{cloneVoices.map((voice) => <option key={voice.id} value={voice.voiceId || ""}>{voice.name} · {voice.model}</option>)}</select><small>{cloneVoices.length ? "复刻音色将使用对应的 Qwen 模型与已保存 voice ID。" : "暂无可用复刻音色，请先在“题目语音管理”完成声音复刻。"}</small></label>
+                    <label>Qwen 合成模型<input value={dynamicTts.model || "qwen-audio-3.0-tts-flash"} onChange={(event) => updateDynamicTts({ model: event.target.value })} placeholder="qwen-audio-3.0-tts-flash" /></label>
+                  </> : <label>Sambert 模型<input value={dynamicTts.model || "sambert-zhida-v1"} onChange={(event) => updateDynamicTts({ model: event.target.value })} placeholder="sambert-zhida-v1" /></label>}
+                  <label>语速<input type="number" min="0.5" max="2" step="0.05" value={dynamicTts.rate ?? 1} onChange={(event) => updateDynamicTts({ rate: Number(event.target.value) || 1 })} /></label><label>音调<input type="number" min="0.5" max="2" step="0.05" value={dynamicTts.pitch ?? 1} onChange={(event) => updateDynamicTts({ pitch: Number(event.target.value) || 1 })} /></label>
+                </>}
                 {dynamicTts.provider === "baidu" && <label>百度发音人 per<input type="number" min="0" max="50000" value={dynamicTts.per ?? 1} onChange={(event) => updateDynamicTts({ per: Number(event.target.value) || 1 })} /><small>默认 1 为度小宇；可填账号已开通的其他发音人。</small></label>}
               </section>
               <small className="field-hint">

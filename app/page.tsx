@@ -7,7 +7,7 @@ import SimulationConfig from "@/components/SimulationConfig";
 import SimulationHistory from "@/components/SimulationHistory";
 import QuestionVoiceManagement from "@/components/QuestionVoiceManagement";
 
-import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, MouseEvent, useCallback, useEffect, useRef, useState } from "react";
 
 type Category = string;
 type User = {
@@ -43,6 +43,17 @@ type BankQuestion = {
   subcategory: string | null;
   status: string;
   extra?: unknown;
+};
+type DuplicateQuestion = Pick<BankQuestion, "id" | "typeId" | "typeName" | "content" | "subcategory" | "status"> & {
+  createdAt?: string | null;
+  recordCount: number;
+  voiceCount: number;
+};
+type DuplicateGroup = { key: string; content: string; count: number; questions: DuplicateQuestion[] };
+type ImportPreview = {
+  totalRows: number; validRows: number; willImport: number; blankRows: number;
+  duplicateExisting: { row: number; content: string }[];
+  duplicateInFile: { row: number; content: string }[];
 };
 type TranscriptSegment = { startMs: number; endMs: number; text: string };
 type RecordItem = {
@@ -2747,6 +2758,15 @@ function QuestionBank() {
     status: string;
   } | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importTypeId, setImportTypeId] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [duplicatesOpen, setDuplicatesOpen] = useState(false);
+  const [duplicateGroups, setDuplicateGroups] = useState<DuplicateGroup[]>([]);
+  const [duplicateSelected, setDuplicateSelected] = useState<number[]>([]);
+  const [duplicateKeepers, setDuplicateKeepers] = useState<Record<string, number>>({});
+  const [duplicatesLoading, setDuplicatesLoading] = useState(false);
   const pageSize = 8;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const allSelected =
@@ -2826,10 +2846,10 @@ function QuestionBank() {
       setMessage((error as Error).message);
     }
   }
-  async function remove(ids: number[]) {
+  async function remove(ids: number[], confirmation = "确定删除选中的题目吗？已有作答记录会保留。") {
     if (
       !ids.length ||
-      !window.confirm("确定删除选中的题目吗？已有作答记录会保留。")
+      !window.confirm(confirmation)
     )
       return;
     try {
@@ -2844,26 +2864,213 @@ function QuestionBank() {
       setMessage((error as Error).message);
     }
   }
+  async function loadDuplicates() {
+    setDuplicatesLoading(true);
+    try {
+      const result = await jsonFetch("/api/question-bank?mode=duplicates");
+      const groups = (result.groups || []) as DuplicateGroup[];
+      setDuplicateGroups(groups);
+      setDuplicateSelected([]);
+      setDuplicateKeepers(Object.fromEntries(groups.map((group) => [group.key, group.questions[0]?.id])));
+    } catch (error) { setMessage((error as Error).message); }
+    finally { setDuplicatesLoading(false); }
+  }
+  async function openDuplicates() {
+    setDuplicatesOpen(true);
+    await loadDuplicates();
+  }
+  function toggleDuplicate(id: number, checked: boolean) {
+    setDuplicateSelected((current) => checked ? Array.from(new Set([...current, id])) : current.filter((item) => item !== id));
+  }
+  async function deleteDuplicateIds(ids: number[], prompt: string) {
+    if (!ids.length) return;
+    await remove(ids, prompt);
+    await loadDuplicates();
+  }
   async function importExcel(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
+    const file = form.get("file"); const typeId = String(form.get("typeId") || "");
+    if (!(file instanceof File) || !file.size) { setMessage("请选择 Excel 文件。"); return; }
+    setImporting(true);
     try {
+      form.set("preview", "1");
       const result = await jsonFetch("/api/question-bank", {
         method: "PUT",
         body: form,
       });
-      setImportOpen(false);
-      setMessage(
-        "已导入 " +
-          result.imported +
-          " 条题目" +
-          (result.skipped ? "，跳过 " + result.skipped + " 行" : ""),
-      );
-      await load(1);
+      setImportFile(file); setImportTypeId(typeId); setImportPreview(result as ImportPreview);
     } catch (error) {
       setMessage((error as Error).message);
-    }
+    } finally { setImporting(false); }
   }
+  async function confirmImport() {
+    if (!importFile || !importTypeId) return;
+    setImporting(true);
+    try {
+      const form = new FormData(); form.set("typeId", importTypeId); form.set("file", importFile); form.set("confirmImportDuplicates", "1");
+      const result = await jsonFetch("/api/question-bank", { method: "PUT", body: form });
+      setImportOpen(false); setImportPreview(null); setImportFile(null);
+      setMessage("已导入 " + result.imported + " 条题目" + (result.skipped ? "，自动跳过 " + result.skipped + " 行（含重复或空白）" : ""));
+      await load(1);
+    } catch (error) { setMessage((error as Error).message); }
+    finally { setImporting(false); }
+  }
+  function closeImport() {
+    if (importing) return;
+    setImportOpen(false); setImportPreview(null); setImportFile(null); setImportTypeId("");
+  }
+  function openImport() {
+    setImportPreview(null); setImportFile(null); setImportTypeId(typeFilter || String(types[0]?.id || "")); setImportOpen(true);
+  }
+  function previewDuplicateRows(rows: { row: number; content: string }[]) {
+    return rows.slice(0, 3).map((item) => `第 ${item.row} 行：${item.content}`).join("；");
+  }
+  function closeDuplicates() {
+    if (!duplicatesLoading) setDuplicatesOpen(false);
+  }
+  async function deleteKeeping(group: DuplicateGroup) {
+    const keeper = duplicateKeepers[group.key];
+    const ids = group.questions.filter((item) => item.id !== keeper).map((item) => item.id);
+    await deleteDuplicateIds(ids, `将保留选中的题目，并删除其余 ${ids.length} 道重复题。已有作答记录会保留，确认继续吗？`);
+  }
+  async function deleteSelectedDuplicates() {
+    await deleteDuplicateIds(duplicateSelected, `确定删除选中的 ${duplicateSelected.length} 道重复题吗？已有作答记录会保留。`);
+  }
+  function duplicateCountText(group: DuplicateGroup) {
+    return `${group.count} 道相同题干`;
+  }
+  function duplicateAssetText(item: DuplicateQuestion) {
+    const labels = [] as string[];
+    if (item.recordCount) labels.push(`${item.recordCount} 条作答`);
+    if (item.voiceCount) labels.push(`${item.voiceCount} 个配音`);
+    return labels.join(" · ") || "无作答和配音";
+  }
+  function setKeeper(groupKey: string, id: number) {
+    setDuplicateKeepers((current) => ({ ...current, [groupKey]: id }));
+  }
+  function selectedDuplicateCount() {
+    return duplicateSelected.length;
+  }
+  function preventClose(event: MouseEvent<HTMLDivElement>) {
+    if (event.target === event.currentTarget) closeDuplicates();
+  }
+  function importPreventClose(event: MouseEvent<HTMLDivElement>) {
+    if (event.target === event.currentTarget) closeImport();
+  }
+  function duplicateRowChecked(id: number) {
+    return duplicateSelected.includes(id);
+  }
+  function duplicateKeeperFor(group: DuplicateGroup) {
+    return duplicateKeepers[group.key] || group.questions[0]?.id;
+  }
+  function duplicateRowKey(group: DuplicateGroup, item: DuplicateQuestion) {
+    return `${group.key}-${item.id}`;
+  }
+  function useImportPreview() {
+    return Boolean(importPreview);
+  }
+  function importSubmitText() {
+    return importing ? "正在检查…" : "检查重复并继续";
+  }
+  function confirmImportText() {
+    return importing ? "正在导入…" : `跳过重复，导入 ${importPreview?.willImport || 0} 条`;
+  }
+  function hasDuplicateRows() {
+    return Boolean(importPreview && (importPreview.duplicateExisting.length || importPreview.duplicateInFile.length || importPreview.blankRows));
+  }
+  function importDescription() {
+    if (!importPreview) return "Excel 需要包含“题目内容”列；“参考答案”“具体分类”“来源”“备注”均可选。提交后会先检查与题库、文件内部重复的题干。";
+    return `预检完成：将导入 ${importPreview.willImport} 条；重复或空白行会自动剔除，不影响其他题目。`;
+  }
+  function importPreviewRowsLabel() {
+    if (!importPreview) return "";
+    return `共读取 ${importPreview.totalRows} 行，含 ${importPreview.validRows} 行有题干内容。`;
+  }
+  function duplicateEmptyText() {
+    return duplicatesLoading ? "正在检查全部题目…" : "没有发现重复题干";
+  }
+  function duplicateEmptyHint() {
+    return duplicatesLoading ? "请稍候。" : "题目会按去除首尾空格及连续空格后的题干比对。";
+  }
+  function duplicateDialogTitle() {
+    return `重复题处理${duplicateGroups.length ? ` · ${duplicateGroups.length} 组` : ""}`;
+  }
+  function duplicateBulkText() {
+    return `批量删除已选（${selectedDuplicateCount()}）`;
+  }
+  function isDuplicateBulkDisabled() { return !selectedDuplicateCount() || duplicatesLoading; }
+  function isDuplicateKeepDisabled(group: DuplicateGroup) { return duplicatesLoading || group.count < 2; }
+  function duplicateCloseDisabled() { return duplicatesLoading; }
+  function importCloseDisabled() { return importing; }
+  function importHasIssues() { return hasDuplicateRows(); }
+  function importExistingExample() { return importPreview ? previewDuplicateRows(importPreview.duplicateExisting) : ""; }
+  function importFileExample() { return importPreview ? previewDuplicateRows(importPreview.duplicateInFile) : ""; }
+  function importedFileName() { return importFile?.name || ""; }
+  function duplicateQuestionSelectionLabel(item: DuplicateQuestion) { return `选择删除题目 ${item.id}`; }
+  function duplicateKeeperLabel(item: DuplicateQuestion) { return `保留题目 ${item.id}`; }
+  function duplicateRemoveLabel(group: DuplicateGroup) { return `保留选中项，删除其余 ${group.count - 1} 道`; }
+  function duplicateTypeLabel(item: DuplicateQuestion) { return item.typeName || "未分类"; }
+  function duplicateSubcategoryLabel(item: DuplicateQuestion) { return item.subcategory || "无具体分类"; }
+  function duplicateIdLabel(item: DuplicateQuestion) { return `题目 #${item.id}`; }
+  function duplicateContentLabel(group: DuplicateGroup) { return group.content; }
+  function importCanConfirm() { return Boolean(importPreview && importFile && importTypeId && !importing); }
+  function importCanPreflight() { return !importing; }
+  function importNewFile() { setImportPreview(null); setImportFile(null); }
+  function keepSelectionChange(group: DuplicateGroup, id: number) { setKeeper(group.key, id); }
+  function shouldShowImportWarning() { return useImportPreview() && importHasIssues(); }
+  function shouldShowImportClean() { return useImportPreview() && !importHasIssues(); }
+  function importDefaultType() { return importTypeId || typeFilter || String(types[0]?.id || ""); }
+  function importTypeChange(value: string) { setImportTypeId(value); importNewFile(); }
+  function importFileChange(file: File | null) { setImportFile(file); setImportPreview(null); }
+  function importFileRequired() { return !importPreview; }
+  function importPreviewFileInputDisabled() { return importing || Boolean(importPreview); }
+  function importConfirmCancel() { setImportPreview(null); }
+  function duplicateDeleteRemaining(group: DuplicateGroup) { void deleteKeeping(group); }
+  function duplicateDeleteBulk() { void deleteSelectedDuplicates(); }
+  function duplicateToggle(item: DuplicateQuestion, checked: boolean) { toggleDuplicate(item.id, checked); }
+  function duplicateRefresh() { void loadDuplicates(); }
+  function importSubmit(event: FormEvent<HTMLFormElement>) { void importExcel(event); }
+  function importConfirm() { void confirmImport(); }
+  function duplicateOpen() { void openDuplicates(); }
+  function duplicateClose() { closeDuplicates(); }
+  function importClose() { closeImport(); }
+  function importOpenDialog() { openImport(); }
+  function duplicateBackdropClick(event: MouseEvent<HTMLDivElement>) { preventClose(event); }
+  function importBackdropClick(event: MouseEvent<HTMLDivElement>) { importPreventClose(event); }
+  function importDialogCloseButton() { closeImport(); }
+  function duplicateDialogCloseButton() { closeDuplicates(); }
+  function importTypeValue() { return importDefaultType(); }
+  function duplicateGroupsPresent() { return duplicateGroups.length > 0; }
+  function duplicateButtonText(group: DuplicateGroup) { return duplicateRemoveLabel(group); }
+  function importPreviewMessage() { return importPreviewRowsLabel(); }
+  function importFileInputChange(event: ChangeEvent<HTMLInputElement>) { importFileChange(event.target.files?.[0] || null); }
+  function importTypeInputChange(event: ChangeEvent<HTMLSelectElement>) { importTypeChange(event.target.value); }
+  function duplicateRadioChange(group: DuplicateGroup, item: DuplicateQuestion) { keepSelectionChange(group, item.id); }
+  function duplicateCheckboxChange(item: DuplicateQuestion, event: ChangeEvent<HTMLInputElement>) { duplicateToggle(item, event.target.checked); }
+  function isDuplicateKeeper(group: DuplicateGroup, item: DuplicateQuestion) { return duplicateKeeperFor(group) === item.id; }
+  function duplicateKeepButtonClick(group: DuplicateGroup) { duplicateDeleteRemaining(group); }
+  function duplicateBatchClick() { duplicateDeleteBulk(); }
+  function duplicateRefreshClick() { duplicateRefresh(); }
+  function importConfirmClick() { importConfirm(); }
+  function importPreviewCancelClick() { importConfirmCancel(); }
+  function importSubmitButtonText() { return importSubmitText(); }
+  function importConfirmButtonText() { return confirmImportText(); }
+  function importWarningText() { return "发现重复或空白行，以下内容会自动跳过："; }
+  function importCleanText() { return "未发现重复题干，可直接导入。"; }
+  function importExistingText() { return `与题库已有题目重复：${importPreview?.duplicateExisting.length || 0} 行`; }
+  function importFileText() { return `文件内部重复：${importPreview?.duplicateInFile.length || 0} 行`; }
+  function importBlankText() { return `题目内容为空：${importPreview?.blankRows || 0} 行`; }
+  function importPreviewDialogTitle() { return "确认导入结果"; }
+  function importSubmitHandler(event: FormEvent<HTMLFormElement>) { importSubmit(event); }
+  function duplicateKeepText(group: DuplicateGroup) { return duplicateButtonText(group); }
+  function duplicateHeaderText(group: DuplicateGroup) { return duplicateCountText(group); }
+  function duplicateRowMeta(item: DuplicateQuestion) { return `${duplicateTypeLabel(item)} · ${duplicateSubcategoryLabel(item)} · ${duplicateAssetText(item)}`; }
+  function duplicateGroupContent(group: DuplicateGroup) { return duplicateContentLabel(group); }
+  function importDescriptionText() { return importDescription(); }
+  function importFileNameText() { return importedFileName(); }
+  function importShowWarning() { return shouldShowImportWarning(); }
+  function importShowClean() { return shouldShowImportClean(); }
   function jump(event: FormEvent) {
     event.preventDefault();
     const target = Math.min(totalPages, Math.max(1, Number(jumpPage) || 1));
@@ -2879,9 +3086,12 @@ function QuestionBank() {
           <p>维护题目、答案和具体分类，也可以批量导入 Excel。</p>
         </div>
         <div className="bank-actions">
+          <button className="secondary-action" onClick={duplicateOpen}>
+            重复题处理
+          </button>
           <button
             className="secondary-action"
-            onClick={() => setImportOpen(true)}
+            onClick={importOpenDialog}
           >
             ↑ 导入 Excel
           </button>
@@ -3092,29 +3302,28 @@ function QuestionBank() {
       {importOpen && (
         <div
           className="modal-backdrop"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setImportOpen(false);
-          }}
+          onMouseDown={importBackdropClick}
         >
-          <form className="create-modal import-modal" onSubmit={importExcel}>
+          <form className="create-modal import-modal" onSubmit={importSubmitHandler}>
             <button
               type="button"
               className="modal-close"
-              onClick={() => setImportOpen(false)}
+              disabled={importCloseDisabled()}
+              onClick={importDialogCloseButton}
             >
               ×
             </button>
             <span className="section-kicker">EXCEL IMPORT</span>
-            <h2>导入题库 Excel</h2>
-            <p>
-              Excel
-              需要包含“题目内容”列；“参考答案”“具体分类”“来源”“备注”均可选。
-            </p>
+            <h2>{useImportPreview() ? importPreviewDialogTitle() : "导入题库 Excel"}</h2>
+            <p>{importDescriptionText()}</p>
+            {useImportPreview() && <p className="import-preview-summary">{importPreviewMessage()}</p>}
             <label>
               导入到题型
               <select
                 name="typeId"
-                defaultValue={typeFilter || types[0]?.id || ""}
+                value={importTypeValue()}
+                disabled={importPreviewFileInputDisabled()}
+                onChange={importTypeInputChange}
                 required
               >
                 {types.map((type) => (
@@ -3130,11 +3339,57 @@ function QuestionBank() {
                 name="file"
                 type="file"
                 accept=".xlsx,.xls,.csv"
-                required
+                disabled={importPreviewFileInputDisabled()}
+                onChange={importFileInputChange}
+                required={importFileRequired()}
               />
             </label>
-            <button className="modal-submit">开始导入</button>
+            {useImportPreview() && (
+              <div className="import-preview" role="status">
+                <strong>{importShowWarning() ? importWarningText() : importCleanText()}</strong>
+                {importShowWarning() && <ul>
+                  {!!importPreview?.duplicateExisting.length && <li>{importExistingText()}。{importExistingExample()}</li>}
+                  {!!importPreview?.duplicateInFile.length && <li>{importFileText()}。{importFileExample()}</li>}
+                  {!!importPreview?.blankRows && <li>{importBlankText()}。</li>}
+                </ul>}
+                <small>文件：{importFileNameText()}</small>
+              </div>
+            )}
+            {useImportPreview() ? (
+              <div className="modal-button-row">
+                <button type="button" className="secondary-action" disabled={importing} onClick={importPreviewCancelClick}>返回修改</button>
+                <button type="button" className="modal-submit" disabled={!importCanConfirm()} onClick={importConfirmClick}>{importConfirmButtonText()}</button>
+              </div>
+            ) : <button className="modal-submit" disabled={!importCanPreflight()}>{importSubmitButtonText()}</button>}
           </form>
+        </div>
+      )}
+      {duplicatesOpen && (
+        <div className="modal-backdrop" onMouseDown={duplicateBackdropClick}>
+          <section className="create-modal duplicate-modal" role="dialog" aria-modal="true" aria-labelledby="duplicate-question-title">
+            <button type="button" className="modal-close" aria-label="关闭重复题处理" disabled={duplicateCloseDisabled()} onClick={duplicateDialogCloseButton}>×</button>
+            <span className="section-kicker">DEDUPLICATE QUESTIONS</span>
+            <h2 id="duplicate-question-title">{duplicateDialogTitle()}</h2>
+            <p>按题干内容（忽略首尾及连续空格）分组。先选一条保留，再删除其他重复项；也可跨分组勾选后批量删除。</p>
+            <div className="duplicate-modal-actions">
+              <button type="button" className="secondary-action" disabled={duplicatesLoading} onClick={duplicateRefreshClick}>重新检查</button>
+              <button type="button" className="danger-action" disabled={isDuplicateBulkDisabled()} onClick={duplicateBatchClick}>{duplicateBulkText()}</button>
+            </div>
+            <div className="duplicate-groups">
+              {!duplicateGroupsPresent() ? <div className="duplicate-empty"><strong>{duplicateEmptyText()}</strong><small>{duplicateEmptyHint()}</small></div> : duplicateGroups.map((group) => (
+                <article key={group.key} className="duplicate-group">
+                  <header><div><span>{duplicateHeaderText(group)}</span><h3>{duplicateGroupContent(group)}</h3></div><button type="button" className="danger-text" disabled={isDuplicateKeepDisabled(group)} onClick={() => duplicateKeepButtonClick(group)}>{duplicateKeepText(group)}</button></header>
+                  <div className="duplicate-question-list">
+                    {group.questions.map((item) => <label key={duplicateRowKey(group, item)} className="duplicate-question-row">
+                      <input type="checkbox" aria-label={duplicateQuestionSelectionLabel(item)} checked={duplicateRowChecked(item.id)} onChange={(event) => duplicateCheckboxChange(item, event)} />
+                      <input type="radio" name={`keeper-${group.key}`} aria-label={duplicateKeeperLabel(item)} checked={isDuplicateKeeper(group, item)} onChange={() => duplicateRadioChange(group, item)} />
+                      <span><b>{duplicateIdLabel(item)}</b><small>{duplicateRowMeta(item)}</small></span>
+                    </label>)}
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
         </div>
       )}
     </main>

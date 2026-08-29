@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import type { RowDataPacket } from 'mysql2/promise';
 import { apiError, requireUser } from '@/lib/auth';
 import { execute, query } from '@/lib/db';
 
@@ -11,6 +12,12 @@ type QuestionPayload = {
   status?: string;
 };
 
+type ImportCandidate = { row: number; content: string; answer: string; subcategory: string; extra: string | null };
+
+function normalizedContent(value: unknown) {
+  return String(value || '').trim().replace(/\s+/g, ' ');
+}
+
 function parseExtra(value: unknown) {
   if (!value) return null;
   if (typeof value === 'object') return JSON.stringify(value);
@@ -21,6 +28,35 @@ function parseExtra(value: unknown) {
 async function questionIdWithContent(content: string, excludeId?: number) {
   const rows = await query('SELECT id FROM questions WHERE content = ?' + (excludeId ? ' AND id <> ?' : '') + ' LIMIT 1', excludeId ? [content, excludeId] : [content]);
   return rows.length ? Number((rows[0] as { id: number }).id) : null;
+}
+
+async function existingContentKeys() {
+  const rows = await query<RowDataPacket[]>('SELECT content FROM questions');
+  return new Set(rows.map((row) => normalizedContent(row.content)).filter(Boolean));
+}
+
+async function parseImportCandidates(file: File): Promise<{ candidates: ImportCandidate[]; totalRows: number; blankRows: number }> {
+  const workbook = XLSX.read(Buffer.from(await file.arrayBuffer()), { type: 'buffer' });
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  if (!sheet) throw new Error('Excel 中没有可读取的工作表');
+  const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });
+  const aliases = {
+    content: ['题目内容', '题目', '问题', 'content', 'question'],
+    answer: ['参考答案', '答案', 'answer'], subcategory: ['具体分类', '细分类', '分类', 'subcategory'],
+    source: ['来源', 'source'], notes: ['备注', '说明', 'notes'],
+  } as const;
+  const valueOf = (row: Record<string, unknown>, names: readonly string[]) => {
+    const key = Object.keys(row).find((item) => names.includes(item.trim()));
+    return key ? String(row[key] ?? '').trim() : '';
+  };
+  const candidates: ImportCandidate[] = []; let blankRows = 0;
+  rows.forEach((row, index) => {
+    const content = String(valueOf(row, aliases.content)).trim();
+    if (!content) { blankRows += 1; return; }
+    const source = valueOf(row, aliases.source); const notes = valueOf(row, aliases.notes);
+    candidates.push({ row: index + 2, content, answer: valueOf(row, aliases.answer), subcategory: valueOf(row, aliases.subcategory), extra: source || notes ? JSON.stringify({ ...(source ? { source } : {}), ...(notes ? { notes } : {}) }) : null });
+  });
+  return { candidates, totalRows: rows.length, blankRows };
 }
 async function ensureAdmin() {
   const user = await requireUser();
@@ -37,6 +73,23 @@ export async function GET(request: Request) {
   try {
     await ensureAdmin();
     const params = new URL(request.url).searchParams;
+    if (params.get('mode') === 'duplicates') {
+      const rows = await query<RowDataPacket[]>(`SELECT q.id, q.type_id AS typeId, t.name AS typeName, q.content, q.subcategory, q.status,
+        DATE_FORMAT(q.created_at, '%Y-%m-%dT%H:%i:%s') AS createdAt,
+        (SELECT COUNT(*) FROM practice_records pr WHERE pr.question_id = q.id) AS recordCount,
+        (SELECT COUNT(*) FROM question_voices qv WHERE qv.question_id = q.id AND qv.kind = 'generated') AS voiceCount
+        FROM questions q LEFT JOIN question_types t ON t.id = q.type_id ORDER BY q.id DESC`);
+      const grouped = new Map<string, typeof rows>();
+      rows.forEach((row) => {
+        const key = normalizedContent(row.content); if (!key) return;
+        grouped.set(key, [...(grouped.get(key) || []), row]);
+      });
+      const groups = Array.from(grouped.values()).filter((items) => items.length > 1).map((items) => ({
+        key: normalizedContent(items[0].content), content: items[0].content, count: items.length,
+        questions: items.map((item) => ({ ...item, id: Number(item.id), typeId: Number(item.typeId), recordCount: Number(item.recordCount), voiceCount: Number(item.voiceCount) })),
+      }));
+      return Response.json({ groups, duplicateCount: groups.reduce((total, group) => total + group.count, 0) });
+    }
     const page = Math.max(1, Number(params.get('page') || 1));
     const pageSize = Math.min(50, Math.max(5, Number(params.get('pageSize') || 10)));
     const typeId = Number(params.get('typeId') || 0);
@@ -115,39 +168,30 @@ export async function PUT(request: Request) {
     if (!Number.isInteger(typeId) || !(await typeExists(typeId))) return Response.json({ error: '请选择有效题型' }, { status: 400 });
     if (!(file instanceof File) || !file.size) return Response.json({ error: '请选择 Excel 文件' }, { status: 400 });
     if (file.size > 10 * 1024 * 1024) return Response.json({ error: 'Excel 文件不能超过 10MB' }, { status: 400 });
-    const workbook = XLSX.read(Buffer.from(await file.arrayBuffer()), { type: 'buffer' });
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    if (!sheet) return Response.json({ error: 'Excel 中没有可读取的工作表' }, { status: 400 });
-    const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });
-    const aliases = {
-      content: ['题目内容', '题目', '问题', 'content', 'question'],
-      answer: ['参考答案', '答案', 'answer'],
-      subcategory: ['具体分类', '细分类', '分类', 'subcategory'],
-      source: ['来源', 'source'],
-      notes: ['备注', '说明', 'notes'],
-    } as const;
-    const valueOf = (row: Record<string, unknown>, names: readonly string[]) => {
-      const key = Object.keys(row).find((item) => names.includes(item.trim()));
-      return key ? String(row[key] ?? '').trim() : '';
-    };
-    let imported = 0; let skipped = 0; const errors: string[] = [];
-    const importedContents = new Set<string>();
-    for (let index = 0; index < rows.length; index += 1) {
-      const row = rows[index]; const content = valueOf(row, aliases.content);
-      if (!content) { skipped += 1; continue; }
-      if (importedContents.has(content) || await questionIdWithContent(content)) {
-        skipped += 1;
-        continue;
-      }
-      const answer = valueOf(row, aliases.answer); const subcategory = valueOf(row, aliases.subcategory);
-      const source = valueOf(row, aliases.source); const notes = valueOf(row, aliases.notes);
-      const extra = source || notes ? JSON.stringify({ ...(source ? { source } : {}), ...(notes ? { notes } : {}) }) : null;
-      try {
-        await execute('INSERT INTO questions (type_id, content, answer, subcategory, extra, status) VALUES (?, ?, ?, ?, ?, ?)', [typeId, content, answer || null, subcategory || null, extra, 'active']);
-        importedContents.add(content);
-        imported += 1;
-      } catch (error) { errors.push(`第 ${index + 2} 行：${String(error)}`); }
+    const parsed = await parseImportCandidates(file);
+    const existing = await existingContentKeys(); const inFile = new Set<string>();
+    const duplicateExisting: { row: number; content: string }[] = []; const duplicateInFile: { row: number; content: string }[] = [];
+    const importable = parsed.candidates.filter((candidate) => {
+      const key = normalizedContent(candidate.content);
+      if (existing.has(key)) { duplicateExisting.push({ row: candidate.row, content: candidate.content }); return false; }
+      if (inFile.has(key)) { duplicateInFile.push({ row: candidate.row, content: candidate.content }); return false; }
+      inFile.add(key); return true;
+    });
+    if (String(form.get('preview')) === '1') {
+      return Response.json({ preview: true, totalRows: parsed.totalRows, validRows: parsed.candidates.length, willImport: importable.length, blankRows: parsed.blankRows, duplicateExisting, duplicateInFile });
     }
-    return Response.json({ imported, skipped, errors: errors.slice(0, 20), totalRows: rows.length });
+    if (String(form.get('confirmImportDuplicates')) !== '1') return Response.json({ error: '请先完成导入预检确认。' }, { status: 400 });
+    let imported = 0; let skipped = parsed.blankRows + duplicateExisting.length + duplicateInFile.length; const errors: string[] = [];
+    const currentExisting = await existingContentKeys();
+    for (const candidate of importable) {
+      const key = normalizedContent(candidate.content);
+      if (currentExisting.has(key)) { skipped += 1; continue; }
+      try {
+        await execute('INSERT INTO questions (type_id, content, answer, subcategory, extra, status) VALUES (?, ?, ?, ?, ?, ?)', [typeId, candidate.content, candidate.answer || null, candidate.subcategory || null, candidate.extra, 'active']);
+        currentExisting.add(key);
+        imported += 1;
+      } catch (error) { errors.push(`第 ${candidate.row} 行：${String(error)}`); }
+    }
+    return Response.json({ imported, skipped, errors: errors.slice(0, 20), totalRows: parsed.totalRows, duplicateExisting: duplicateExisting.length, duplicateInFile: duplicateInFile.length });
   } catch (error) { return apiError(error); }
 }

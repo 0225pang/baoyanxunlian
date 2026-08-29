@@ -196,11 +196,15 @@ export async function synthesizeConfiguredQuestionVoice(config: unknown, text: s
   const provider = value.provider === 'baidu' ? 'baidu' : value.provider === 'bailian' ? 'bailian' : 'browser';
   if (provider === 'browser') return null;
   const settings = await getTtsSettings();
-  const model = provider === 'baidu' ? 'baidu-duxiaoyu' : String(value.model || 'sambert-zhida-v1').trim();
+  const usingClone = provider === 'bailian' && value.sourceMode === 'clone';
+  const voiceId = usingClone ? String(value.voiceId || '').trim() : '';
+  if (usingClone && !voiceId) throw new Error('真实模拟流程未选择可用的百炼复刻音色。');
+  const model = provider === 'baidu' ? 'baidu-duxiaoyu' : String(value.model || (usingClone ? settings.defaultModel : 'sambert-zhida-v1')).trim();
+  if (usingClone && model.startsWith('sambert-')) throw new Error('复刻音色需要使用 Qwen-Audio-TTS 模型，不能使用 Sambert 模型。');
   const parameters = provider === 'baidu'
     ? { per: Number(value.per) || 1, spd: 5, pit: 5, volume: 5, format: 'mp3' }
     : { speech_rate: Number(value.rate) || 1, pitch_rate: Number(value.pitch) || 1, volume: Number(value.volume) || 50, format: 'mp3' };
-  return synthesizeVoice(settings, { provider, text, model, voiceId: '', parameters });
+  return synthesizeVoice(settings, { provider, text, model, voiceId, parameters });
 }
 
 /** Sambert protocol: one non-duplex run-task with text in payload.input. */
