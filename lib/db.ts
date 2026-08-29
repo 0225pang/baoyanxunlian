@@ -170,6 +170,7 @@ const schema = [
     modules JSON NOT NULL,
     total_seconds INT UNSIGNED NOT NULL DEFAULT 1800,
     module_timeout_mode VARCHAR(20) NOT NULL DEFAULT 'warn',
+    dynamic_tts_config JSON NULL,
     followup_prompt LONGTEXT NULL,
     is_active TINYINT(1) NOT NULL DEFAULT 1,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -212,6 +213,8 @@ const schema = [
     transcript_segments JSON NULL,
     audio_data LONGBLOB NULL,
     audio_mime VARCHAR(100) NULL,
+    question_audio_data LONGBLOB NULL,
+    question_audio_mime VARCHAR(100) NULL,
     elapsed_seconds INT UNSIGNED NOT NULL DEFAULT 0,
     followup_question TEXT NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -392,6 +395,15 @@ async function ensureAiColumns(db: Pool) {
 async function ensureSimulationColumns(db: Pool) {
   if (!(await hasColumn(db, 'simulation_templates', 'module_timeout_mode'))) {
     await db.query("ALTER TABLE simulation_templates ADD COLUMN module_timeout_mode VARCHAR(20) NOT NULL DEFAULT 'warn' AFTER total_seconds");
+  }
+  if (!(await hasColumn(db, 'simulation_templates', 'dynamic_tts_config'))) {
+    await db.query('ALTER TABLE simulation_templates ADD COLUMN dynamic_tts_config JSON NULL AFTER module_timeout_mode');
+  }
+  if (!(await hasColumn(db, 'simulation_answers', 'question_audio_data'))) {
+    await db.query('ALTER TABLE simulation_answers ADD COLUMN question_audio_data LONGBLOB NULL AFTER audio_mime');
+  }
+  if (!(await hasColumn(db, 'simulation_answers', 'question_audio_mime'))) {
+    await db.query('ALTER TABLE simulation_answers ADD COLUMN question_audio_mime VARCHAR(100) NULL AFTER question_audio_data');
   }
 }
 async function ensureQuestionVoiceColumns(db: Pool) {

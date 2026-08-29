@@ -7,6 +7,7 @@ import {
   safeJsonParse,
 } from "@/lib/ai";
 import { assertApiAccess, logApiUsage, readTokenUsage } from "@/lib/usage";
+import { synthesizeConfiguredQuestionVoice } from "@/lib/question-voices";
 import type { RowDataPacket } from "mysql2/promise";
 
 export async function POST(
@@ -45,7 +46,7 @@ export async function POST(
       );
     await assertApiAccess(Number(sessions[0].userId), "ai");
     const templates = await query<RowDataPacket[]>(
-      "SELECT followup_prompt AS followupPrompt FROM simulation_templates WHERE id = ? LIMIT 1",
+      "SELECT followup_prompt AS followupPrompt, dynamic_tts_config AS dynamicTtsConfig FROM simulation_templates WHERE id = ? LIMIT 1",
       [Number(sessions[0].templateId)],
     );
     const prompt = String(
@@ -104,7 +105,17 @@ export async function POST(
       outputTokens: usage.outputTokens || Math.ceil(followup.length / 2),
       model: config.model,
     });
-    return Response.json({ followup });
+    let audio: { base64: string; mime: string } | null = null;
+    let audioError = "";
+    try {
+      const rawConfig = templates[0]?.dynamicTtsConfig;
+      const config = typeof rawConfig === "string" ? JSON.parse(rawConfig || "{}") : rawConfig;
+      const generated = await synthesizeConfiguredQuestionVoice(config, followup);
+      if (generated) audio = { base64: generated.audio.toString("base64"), mime: generated.mime };
+    } catch (error) {
+      audioError = error instanceof Error ? error.message.slice(0, 300) : "现场题目语音生成失败";
+    }
+    return Response.json({ followup, audio, audioError: audioError || undefined });
   } catch (error) {
     return apiError(error);
   }

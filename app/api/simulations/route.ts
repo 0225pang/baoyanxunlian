@@ -14,6 +14,8 @@ type Module = {
   prompt?: string;
 };
 
+function voiceUrl(voiceId: unknown) { return voiceId ? `/api/question-voices/${Number(voiceId)}/audio?kind=output` : null; }
+
 export async function GET() {
   try {
     await requireUser();
@@ -31,7 +33,7 @@ export async function POST(request: Request) {
     const user = await requireUser();
     const body = (await request.json()) as { templateId?: number };
     const rows = await query<RowDataPacket[]>(
-      "SELECT id, name, modules, total_seconds AS totalSeconds, module_timeout_mode AS moduleTimeoutMode FROM simulation_templates WHERE id = ? AND is_active = 1 LIMIT 1",
+      "SELECT id, name, modules, total_seconds AS totalSeconds, module_timeout_mode AS moduleTimeoutMode, dynamic_tts_config AS dynamicTtsConfig FROM simulation_templates WHERE id = ? AND is_active = 1 LIMIT 1",
       [Number(body.templateId)],
     );
     const template = rows[0];
@@ -49,6 +51,7 @@ export async function POST(request: Request) {
       Module & {
         templateModuleId?: string;
         questionId?: number;
+        questionVoiceUrl?: string | null;
         question?: string;
         category?: string;
         subcategory?: string | null;
@@ -82,7 +85,9 @@ export async function POST(request: Request) {
           continue;
         }
         const questions = await query<RowDataPacket[]>(
-          `SELECT q.id, q.content, q.answer AS referenceAnswer, q.subcategory, t.name AS category FROM questions q JOIN question_types t ON t.id = q.type_id WHERE q.status = 'active' AND t.code = ? ORDER BY RAND() LIMIT 1`,
+          `SELECT q.id, q.content, q.answer AS referenceAnswer, q.subcategory, t.name AS category,
+          (SELECT v.id FROM question_voices v WHERE v.question_id=q.id AND v.kind='generated' AND v.status='ready' AND v.output_path IS NOT NULL ORDER BY RAND() LIMIT 1) AS questionVoiceId
+          FROM questions q JOIN question_types t ON t.id = q.type_id WHERE q.status = 'active' AND t.code = ? ORDER BY RAND() LIMIT 1`,
           [module.typeCode || "professional"],
         );
         if (!questions[0])
@@ -100,6 +105,7 @@ export async function POST(request: Request) {
           ...module,
           id: module.id + "-" + index,
           questionId: Number(question.id),
+          questionVoiceUrl: voiceUrl(question.questionVoiceId),
           question: String(question.content),
           category: String(question.category),
           subcategory: question.subcategory
@@ -125,6 +131,7 @@ export async function POST(request: Request) {
           name: template.name,
           totalSeconds: Number(template.totalSeconds),
           moduleTimeoutMode: ["immediate_advance", "auto_advance"].includes(String(template.moduleTimeoutMode)) ? template.moduleTimeoutMode : "warn",
+          dynamicTtsConfig: typeof template.dynamicTtsConfig === 'string' ? JSON.parse(template.dynamicTtsConfig || '{}') : (template.dynamicTtsConfig || { provider: 'browser' }),
         },
         steps,
       },

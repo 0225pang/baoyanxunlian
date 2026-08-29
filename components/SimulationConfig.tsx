@@ -25,10 +25,12 @@ type SimulationTemplate = {
   description: string;
   totalSeconds: number | null;
   moduleTimeoutMode?: "warn" | "immediate_advance" | "auto_advance";
+  dynamicTtsConfig?: DynamicTtsConfig | string;
   modules: SimulationStep[] | string;
   followupPrompt?: string;
   isActive?: boolean;
 };
+type DynamicTtsConfig = { provider: "browser" | "baidu" | "bailian"; model?: string; per?: number; rate?: number; pitch?: number; volume?: number };
 type RealtimeConfig = {
   provider: string;
   websocketUrl: string;
@@ -57,6 +59,9 @@ function parseModules(value: SimulationTemplate["modules"]) {
   } catch {
     return [];
   }
+}
+function parseDynamicTts(value: SimulationTemplate["dynamicTtsConfig"]): DynamicTtsConfig {
+  try { const item = typeof value === "string" ? JSON.parse(value || "{}") : value || {}; return { provider: ["browser", "baidu", "bailian"].includes(String(item.provider)) ? item.provider : "browser", model: String(item.model || "sambert-zhida-v1"), per: Number(item.per) || 1, rate: Number(item.rate) || 1, pitch: Number(item.pitch) || 1, volume: Number(item.volume) || 50 }; } catch { return { provider: "browser", model: "sambert-zhida-v1", per: 1, rate: 1, pitch: 1, volume: 50 }; }
 }
 
 export default function SimulationConfig() {
@@ -94,9 +99,11 @@ export default function SimulationConfig() {
     [selected],
   );
   const defaultTypeCode = types[0]?.code || "professional";
+  const dynamicTts = useMemo(() => selected ? parseDynamicTts(selected.dynamicTtsConfig) : parseDynamicTts(undefined), [selected]);
   function updateTemplate(patch: Partial<SimulationTemplate>) {
     setSelected((current) => (current ? { ...current, ...patch } : current));
   }
+  function updateDynamicTts(patch: Partial<DynamicTtsConfig>) { updateTemplate({ dynamicTtsConfig: { ...dynamicTts, ...patch } }); }
   function updateModule(index: number, patch: Partial<SimulationStep>) {
     if (!selected) return;
     updateTemplate({
@@ -180,6 +187,7 @@ export default function SimulationConfig() {
         },
       ],
       followupPrompt: DEFAULT_FOLLOWUP_PROMPT,
+      dynamicTtsConfig: { provider: "browser", model: "sambert-zhida-v1", per: 1, rate: 1, pitch: 1, volume: 50 },
       isActive: true,
     });
   }
@@ -378,6 +386,12 @@ export default function SimulationConfig() {
                   }
                 />
               </label>
+              <section className="dynamic-tts-config">
+                <div><b>现场 AI 题目朗读</b><small>适用于自由交流和老师追问等现场生成的问题；生成的音频会随本次模拟记录保存。</small></div>
+                <label>朗读来源<select value={dynamicTts.provider} onChange={(event) => updateDynamicTts({ provider: event.target.value as DynamicTtsConfig["provider"] })}><option value="browser">浏览器朗读（不调用 TTS API）</option><option value="bailian">百炼 · Sambert 预设音色</option><option value="baidu">百度短文本合成</option></select></label>
+                {dynamicTts.provider === "bailian" && <><label>Sambert 模型<input value={dynamicTts.model || "sambert-zhida-v1"} onChange={(event) => updateDynamicTts({ model: event.target.value })} placeholder="sambert-zhida-v1" /></label><label>语速<input type="number" min="0.5" max="2" step="0.05" value={dynamicTts.rate ?? 1} onChange={(event) => updateDynamicTts({ rate: Number(event.target.value) || 1 })} /></label><label>音调<input type="number" min="0.5" max="2" step="0.05" value={dynamicTts.pitch ?? 1} onChange={(event) => updateDynamicTts({ pitch: Number(event.target.value) || 1 })} /></label></>}
+                {dynamicTts.provider === "baidu" && <label>百度发音人 per<input type="number" min="0" max="50000" value={dynamicTts.per ?? 1} onChange={(event) => updateDynamicTts({ per: Number(event.target.value) || 1 })} /><small>默认 1 为度小宇；可填账号已开通的其他发音人。</small></label>}
+              </section>
               <small className="field-hint">
                 勾选老师追问后，学员点击“完成回答”会自动保存本段并生成下一轮；未完成配置轮次前，不能进入下一环节。
               </small>

@@ -11,7 +11,12 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     if (!Number.isInteger(id) || id < 1) return new Response('Not found', { status: 404 });
     const rows = await query<RowDataPacket[]>(`SELECT public_token AS publicToken, source_path AS sourcePath, source_mime AS sourceMime,
       output_path AS outputPath, output_mime AS outputMime FROM question_voices WHERE id=? LIMIT 1`, [id]); const row = rows[0]; if (!row) return new Response('Not found', { status: 404 });
-    if (token !== String(row.publicToken || '')) { const user = await requireUser(); if (user.role !== 'admin') return new Response('Forbidden', { status: 403 }); }
+    if (token !== String(row.publicToken || '')) {
+      const user = await requireUser();
+      // Generated question audio is part of practice content and may be played
+      // by any signed-in learner. Original cloning samples stay admin-only.
+      if (kind === 'source' && user.role !== 'admin') return new Response('Forbidden', { status: 403 });
+    }
     const buffer = await readQuestionVoiceFile(kind === 'source' ? row.sourcePath : row.outputPath); if (!buffer) return new Response('Not found', { status: 404 });
     return new Response(buffer as unknown as BodyInit, { headers: { 'Content-Type': kind === 'source' ? String(row.sourceMime || 'audio/wav') : String(row.outputMime || 'audio/mpeg'), 'Content-Length': String(buffer.length), 'Cache-Control': 'private, no-store', 'X-Robots-Tag': 'noindex, nofollow' } });
   } catch { return new Response('Not found', { status: 404 }); }

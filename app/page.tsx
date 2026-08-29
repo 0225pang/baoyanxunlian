@@ -25,6 +25,7 @@ type Question = {
   content: string;
   subcategory?: string | null;
   hasAnswer?: number;
+  questionVoiceUrl?: string | null;
 };
 type QuestionType = {
   id: number;
@@ -217,6 +218,7 @@ export default function Home() {
   const stopResolver = useRef<((blob: Blob | null) => void) | null>(null);
   const recordingStartedAt = useRef<number | null>(null);
   const speechRunId = useRef(0);
+  const questionAudio = useRef<HTMLAudioElement | null>(null);
   const audioContext = useRef<AudioContext | null>(null);
 
   const playCue = useCallback((kind: "countdown" | "recording", value = 0) => {
@@ -348,25 +350,24 @@ export default function Home() {
         setCountdown(null);
         if (readQuestion && question) {
           const runId = ++speechRunId.current;
-          if (!("speechSynthesis" in window)) {
-            setMessage("当前浏览器不支持题目朗读");
-            if (autoRecord) void startRecording();
-            return;
-          }
-          window.speechSynthesis.cancel();
-          const utterance = new SpeechSynthesisUtterance(question.content);
-          utterance.lang = /[\u4e00-\u9fff]/.test(question.content)
-            ? "zh-CN"
-            : "en-US";
           let completed = false;
           const finishReading = () => {
             if (completed || speechRunId.current !== runId) return;
             completed = true;
             if (autoRecord) void startRecording();
           };
-          utterance.onend = finishReading;
-          utterance.onerror = finishReading;
-          window.speechSynthesis.speak(utterance);
+          const browserFallback = () => {
+            if (!("speechSynthesis" in window)) { setMessage("当前浏览器不支持题目朗读"); finishReading(); return; }
+            window.speechSynthesis.cancel();
+            const utterance = new SpeechSynthesisUtterance(question.content);
+            utterance.lang = /[\u4e00-\u9fff]/.test(question.content) ? "zh-CN" : "en-US";
+            utterance.onend = finishReading; utterance.onerror = finishReading; window.speechSynthesis.speak(utterance);
+          };
+          if (question.questionVoiceUrl) {
+            const audio = new Audio(question.questionVoiceUrl); questionAudio.current = audio;
+            audio.onended = finishReading; audio.onerror = browserFallback;
+            void audio.play().catch(browserFallback);
+          } else browserFallback();
         } else if (autoRecord) void startRecording();
       } else setCountdown(countdown - 1);
     }, 1000);
@@ -455,6 +456,8 @@ export default function Home() {
   function stopMedia() {
     speechRunId.current += 1;
     window.speechSynthesis?.cancel();
+    questionAudio.current?.pause();
+    questionAudio.current = null;
     if (recorder.current?.state === "recording") recorder.current.stop();
     streamRef.current?.getTracks().forEach((track) => track.stop());
     setRecording(false);
@@ -1003,6 +1006,7 @@ type SimulationStep = {
   category?: string;
   subcategory?: string | null;
   referenceAnswer?: string | null;
+  questionVoiceUrl?: string | null;
 };
 type SimulationTemplate = {
   id: number;
@@ -1012,6 +1016,7 @@ type SimulationTemplate = {
   moduleTimeoutMode?: "warn" | "immediate_advance" | "auto_advance";
   modules: SimulationStep[] | string;
   followupPrompt?: string;
+  dynamicTtsConfig?: { provider?: string; model?: string; per?: number; rate?: number; pitch?: number; volume?: number };
   isActive?: boolean;
 };
 function downsamplePcm(
@@ -1096,6 +1101,7 @@ type SimulationAnswerDraft = {
   transcriptSegments?: TranscriptSegment[];
   elapsedSeconds: number;
   audio?: Blob;
+  questionAudio?: Blob;
   followupQuestion?: string;
 };
 
@@ -1124,6 +1130,7 @@ function Simulation({
   const [followupTurns, setFollowupTurns] = useState<
     Array<{ question: string; answer: string }>
   >([]);
+  const [questionAudioBlobs, setQuestionAudioBlobs] = useState<Record<string, Blob>>({});
   const [fullAudio, setFullAudio] = useState<Blob | null>(null);
   const [autoRecord, setAutoRecord] = useState(true);
   const [readQuestion, setReadQuestion] = useState(false);
@@ -1146,6 +1153,7 @@ function Simulation({
   const moduleTimeoutRef = useRef("");
   const segmentRecordingStartedAt = useRef(0);
   const speechRunId = useRef(0);
+  const questionPromptAudio = useRef<HTMLAudioElement | null>(null);
   const audioContext = useRef<AudioContext | null>(null);
   const [liveTranscript, setLiveTranscript] = useState("");
   const [realtimeStatus, setRealtimeStatus] = useState("");
@@ -1222,6 +1230,8 @@ function Simulation({
     () => () => {
       speechRunId.current += 1;
       window.speechSynthesis?.cancel();
+      questionPromptAudio.current?.pause();
+      questionPromptAudio.current = null;
       if (recorder.current?.state === "recording") recorder.current.stop();
       if (fullRecorder.current?.state === "recording")
         fullRecorder.current.stop();
@@ -1275,6 +1285,7 @@ function Simulation({
                 Math.floor((Date.now() - stepStartedAt) / 1000),
               ),
               audio: segmentBlob || undefined,
+              questionAudio: questionAudioBlobs[questionAudioKey()],
               followupQuestion: followup || undefined,
             },
           ]
@@ -1554,6 +1565,17 @@ function Simulation({
       setRealtimeStatus("实时转写启动失败，录音仍会正常保存");
     }
   }
+  function questionAudioKey(index = stepIndex, followupRoundValue = followupRound, isFollowup = Boolean(followup)) {
+    return isFollowup ? `${index}:followup:${followupRoundValue}` : `${index}:main`;
+  }
+  function saveGeneratedQuestionAudio(payload: { audio?: { base64?: string; mime?: string } | null }, key: string) {
+    const encoded = String(payload.audio?.base64 || "");
+    if (!encoded) return;
+    try {
+      const bytes = Uint8Array.from(atob(encoded), (value) => value.charCodeAt(0));
+      setQuestionAudioBlobs((items) => ({ ...items, [key]: new Blob([bytes], { type: String(payload.audio?.mime || "audio/mpeg") }) }));
+    } catch { /* Browser fallback still reads the text. */ }
+  }
   async function generateDynamicQuestion(
     index = stepIndex,
     priorDrafts = drafts,
@@ -1590,6 +1612,8 @@ function Simulation({
       );
       const question = String(data.question || "").trim();
       if (!question) throw new Error("未生成有效问题");
+      saveGeneratedQuestionAudio(data, `${index}:main`);
+      if (data.audioError) setMessage(`题目已生成；语音合成失败，将使用浏览器朗读：${data.audioError}`);
       setSteps((items) =>
         items.map((item, position) =>
           position === index ? { ...item, question } : item,
@@ -1597,7 +1621,7 @@ function Simulation({
       );
       setStepStartedAt(Date.now());
       setPromptCycle((value) => value + 1);
-      setMessage("");
+      if (!data.audioError) setMessage("");
     } catch (error) {
       const text = (error as Error).message;
       setDynamicQuestionError(text);
@@ -1620,6 +1644,7 @@ function Simulation({
       setStepStartedAt(firstDynamic ? 0 : Date.now());
       setElapsed(0);
       setDrafts([]);
+      setQuestionAudioBlobs({});
       setAnswer("");
       setFollowup(null);
       setFollowupGenerating(false);
@@ -1699,22 +1724,31 @@ function Simulation({
       // 老师追问生成后，页面上的“当前题目”已经切换为 followup。
       // 朗读必须使用同一份当前文本，不能继续朗读原始题目。
       const text = followup || current?.question || current?.prompt || "";
-      if (readQuestion && text && "speechSynthesis" in window) {
+      if (readQuestion && text) {
         const runId = ++speechRunId.current;
         let completed = false;
         setReading(true);
-        window.speechSynthesis.cancel();
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.lang = /[\u4e00-\u9fff]/.test(text) ? "zh-CN" : "en-US";
         const finishReading = () => {
           if (completed || speechRunId.current !== runId) return;
           completed = true;
           setReading(false);
           if (autoRecord) void startRecordingWithCue();
         };
-        utterance.onend = finishReading;
-        utterance.onerror = finishReading;
-        window.speechSynthesis.speak(utterance);
+        const browserFallback = () => {
+          if (!("speechSynthesis" in window)) { finishReading(); return; }
+          window.speechSynthesis.cancel();
+          const utterance = new SpeechSynthesisUtterance(text);
+          utterance.lang = /[\u4e00-\u9fff]/.test(text) ? "zh-CN" : "en-US";
+          utterance.onend = finishReading; utterance.onerror = finishReading; window.speechSynthesis.speak(utterance);
+        };
+        const generatedAudio = questionAudioBlobs[questionAudioKey()];
+        const audioUrl = generatedAudio ? URL.createObjectURL(generatedAudio) : current?.questionVoiceUrl;
+        if (audioUrl) {
+          const audio = new Audio(audioUrl); questionPromptAudio.current = audio;
+          audio.onended = () => { if (generatedAudio) URL.revokeObjectURL(audioUrl); finishReading(); };
+          audio.onerror = () => { if (generatedAudio) URL.revokeObjectURL(audioUrl); browserFallback(); };
+          void audio.play().catch(browserFallback);
+        } else browserFallback();
       } else {
         setReading(false);
         if (autoRecord) void startRecordingWithCue();
@@ -1725,6 +1759,9 @@ function Simulation({
     sessionId,
     countdown,
     current,
+    questionAudioBlobs,
+    followup,
+    followupRound,
     readQuestion,
     autoRecord,
     playCue,
@@ -1776,7 +1813,10 @@ function Simulation({
           }),
         },
       );
-      setFollowup(data.followup);
+      const nextFollowup = String(data.followup || "").trim();
+      setFollowup(nextFollowup);
+      saveGeneratedQuestionAudio(data, `${stepIndex}:followup:${round}`);
+      if (data.audioError) setMessage(`追问已生成；语音合成失败，将使用浏览器朗读：${data.audioError}`);
       return true;
     } catch (error) {
       setMessage((error as Error).message);
@@ -1809,6 +1849,7 @@ function Simulation({
         Math.floor((Date.now() - stepStartedAt) / 1000),
       ),
       audio: audioOverride || undefined,
+      questionAudio: questionAudioBlobs[questionAudioKey()],
       followupQuestion,
     };
     setDrafts((items) => [...items, draft]);
@@ -1887,6 +1928,8 @@ function Simulation({
   async function exitSimulation() {
     speechRunId.current += 1;
     window.speechSynthesis?.cancel();
+    questionPromptAudio.current?.pause();
+    questionPromptAudio.current = null;
     if (recorder.current?.state === "recording") await stopRecording();
     else stopRealtimeTranscription(true);
     if (fullRecorder.current?.state === "recording") await stopFullRecording();
@@ -1921,6 +1964,13 @@ function Simulation({
             "audio-" + index,
             new File([item.audio], "segment-" + index + ".webm", {
               type: item.audio.type || "audio/webm",
+            }),
+          );
+        if (item.questionAudio)
+          form.set(
+            "question-audio-" + index,
+            new File([item.questionAudio], "question-" + index + ".mp3", {
+              type: item.questionAudio.type || "audio/mpeg",
             }),
           );
       });

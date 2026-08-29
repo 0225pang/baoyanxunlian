@@ -2,6 +2,7 @@ import { apiError, requireUser } from '@/lib/auth';
 import { query } from '@/lib/db';
 import { chatCompletionsUrl, extractChatContent, getActiveAiConfig, safeJsonParse } from '@/lib/ai';
 import { assertApiAccess, logApiUsage, readTokenUsage } from '@/lib/usage';
+import { synthesizeConfiguredQuestionVoice } from '@/lib/question-voices';
 import type { RowDataPacket } from 'mysql2/promise';
 
 type DynamicModule = { id?: unknown; kind?: unknown; prompt?: unknown; title?: unknown };
@@ -26,7 +27,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const session = sessions[0];
     if (!session || (Number(session.userId) !== user.id && user.role !== 'admin')) return Response.json({ error: '模拟场次不存在或无权操作' }, { status: 404 });
 
-    const templates = await query<RowDataPacket[]>('SELECT modules FROM simulation_templates WHERE id = ? LIMIT 1', [Number(session.templateId)]);
+    const templates = await query<RowDataPacket[]>('SELECT modules, dynamic_tts_config AS dynamicTtsConfig FROM simulation_templates WHERE id = ? LIMIT 1', [Number(session.templateId)]);
     const rawModules = templates[0]?.modules;
     const modules = (typeof rawModules === 'string' ? JSON.parse(rawModules) : rawModules || []) as DynamicModule[];
     const module = modules.find((item) => String(item.id || '') === String(body.moduleId || '') && item.kind === 'dynamic');
@@ -61,6 +62,12 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       outputTokens: usage.outputTokens || Math.ceil(question.length / 2),
       model: config.model,
     });
-    return Response.json({ question });
+    let audio: { base64: string; mime: string } | null = null; let audioError = '';
+    try {
+      const config = typeof templates[0]?.dynamicTtsConfig === 'string' ? JSON.parse(templates[0].dynamicTtsConfig || '{}') : templates[0]?.dynamicTtsConfig;
+      const generated = await synthesizeConfiguredQuestionVoice(config, question);
+      if (generated) audio = { base64: generated.audio.toString('base64'), mime: generated.mime };
+    } catch (error) { audioError = error instanceof Error ? error.message.slice(0, 300) : '现场题目语音生成失败'; }
+    return Response.json({ question, audio, audioError: audioError || undefined });
   } catch (error) { return apiError(error); }
 }

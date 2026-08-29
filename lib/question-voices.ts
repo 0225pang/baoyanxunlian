@@ -151,7 +151,7 @@ async function synthesizeBaiduVoice(settings: TtsSettings, input: SynthesisInput
   const format = String(input.parameters.format || 'mp3').toLowerCase();
   const aue = format === 'wav' ? '6' : format === 'pcm' ? '4' : '3';
   const form = new URLSearchParams({
-    tex: input.text, tok: token, cuid: 'baoyanxunlian-question-voice', ctp: '1', lan: 'zh', per: '1', aue,
+    tex: input.text, tok: token, cuid: 'baoyanxunlian-question-voice', ctp: '1', lan: 'zh', per: String(Math.round(clampNumber(input.parameters.per, 0, 50000, 1))), aue,
     spd: String(Math.round(clampNumber(input.parameters.spd, 0, 15, 5))),
     pit: String(Math.round(clampNumber(input.parameters.pit, 0, 15, 5))),
     vol: String(Math.round(clampNumber(input.parameters.volume, 0, 9, 5))),
@@ -189,6 +189,18 @@ export async function synthesizeVoice(settings: TtsSettings, input: SynthesisInp
   const audioResponse = await fetch(audioUrl);
   if (!audioResponse.ok) throw new Error(`下载生成音频失败：${await responseError(audioResponse)}`);
   return { audio: Buffer.from(await audioResponse.arrayBuffer()), mime: (audioResponse.headers.get('content-type') || 'audio/mpeg').split(';')[0] };
+}
+
+export async function synthesizeConfiguredQuestionVoice(config: unknown, text: string) {
+  const value = config && typeof config === 'object' ? config as Record<string, unknown> : {};
+  const provider = value.provider === 'baidu' ? 'baidu' : value.provider === 'bailian' ? 'bailian' : 'browser';
+  if (provider === 'browser') return null;
+  const settings = await getTtsSettings();
+  const model = provider === 'baidu' ? 'baidu-duxiaoyu' : String(value.model || 'sambert-zhida-v1').trim();
+  const parameters = provider === 'baidu'
+    ? { per: Number(value.per) || 1, spd: 5, pit: 5, volume: 5, format: 'mp3' }
+    : { speech_rate: Number(value.rate) || 1, pitch_rate: Number(value.pitch) || 1, volume: Number(value.volume) || 50, format: 'mp3' };
+  return synthesizeVoice(settings, { provider, text, model, voiceId: '', parameters });
 }
 
 /** Sambert protocol: one non-duplex run-task with text in payload.input. */
