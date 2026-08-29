@@ -28,6 +28,7 @@ type Question = {
   subcategory?: string | null;
   hasAnswer?: number;
   questionVoiceUrl?: string | null;
+  suppressBrowserRead?: boolean;
 };
 type QuestionType = {
   id: number;
@@ -370,6 +371,7 @@ export default function Home() {
             if (autoRecord) void startRecording();
           };
           const browserFallback = () => {
+            if (question.suppressBrowserRead) { finishReading(); return; }
             if (!("speechSynthesis" in window)) { setMessage("当前浏览器不支持题目朗读"); finishReading(); return; }
             window.speechSynthesis.cancel();
             const utterance = new SpeechSynthesisUtterance(question.content);
@@ -1023,6 +1025,7 @@ type SimulationStep = {
   subcategory?: string | null;
   referenceAnswer?: string | null;
   questionVoiceUrl?: string | null;
+  suppressBrowserRead?: boolean;
 };
 type SimulationTemplate = {
   id: number;
@@ -1751,6 +1754,7 @@ function Simulation({
           if (autoRecord) void startRecordingWithCue();
         };
         const browserFallback = () => {
+          if (current?.suppressBrowserRead && !followup) { finishReading(); return; }
           if (!("speechSynthesis" in window)) { finishReading(); return; }
           window.speechSynthesis.cancel();
           const utterance = new SpeechSynthesisUtterance(text);

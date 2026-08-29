@@ -52,6 +52,7 @@ export async function POST(request: Request) {
         templateModuleId?: string;
         questionId?: number;
         questionVoiceUrl?: string | null;
+        suppressBrowserRead?: boolean;
         question?: string;
         category?: string;
         subcategory?: string | null;
@@ -86,7 +87,8 @@ export async function POST(request: Request) {
         }
         const questions = await query<RowDataPacket[]>(
           `SELECT q.id, q.content, q.answer AS referenceAnswer, q.subcategory, t.name AS category,
-          (SELECT v.id FROM question_voices v WHERE v.question_id=q.id AND v.kind='generated' AND v.status='ready' AND v.output_path IS NOT NULL ORDER BY RAND() LIMIT 1) AS questionVoiceId
+          CASE WHEN t.code='literature_translation' THEN (SELECT v.id FROM question_voices v WHERE v.question_id IS NULL AND v.kind='translation_prompt' AND v.status='ready' AND v.output_path IS NOT NULL ORDER BY RAND() LIMIT 1) ELSE (SELECT v.id FROM question_voices v WHERE v.question_id=q.id AND v.kind='generated' AND v.status='ready' AND v.output_path IS NOT NULL ORDER BY RAND() LIMIT 1) END AS questionVoiceId,
+          t.code AS typeCode
           FROM questions q JOIN question_types t ON t.id = q.type_id WHERE q.status = 'active' AND t.code = ? ORDER BY RAND() LIMIT 1`,
           [module.typeCode || "professional"],
         );
@@ -106,6 +108,7 @@ export async function POST(request: Request) {
           id: module.id + "-" + index,
           questionId: Number(question.id),
           questionVoiceUrl: voiceUrl(question.questionVoiceId),
+          suppressBrowserRead: String(question.typeCode) === 'literature_translation',
           question: String(question.content),
           category: String(question.category),
           subcategory: question.subcategory

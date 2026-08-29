@@ -27,12 +27,12 @@ export async function GET(request: Request) {
 
     const sql = 'SELECT q.id, q.content, q.subcategory, t.id AS typeId, t.code AS typeCode, t.name AS category, '
       + "CASE WHEN q.answer IS NULL OR TRIM(q.answer) = '' THEN 0 ELSE 1 END AS hasAnswer "
-      + ", (SELECT v.id FROM question_voices v WHERE v.question_id=q.id AND v.kind='generated' AND v.status='ready' AND v.output_path IS NOT NULL ORDER BY RAND() LIMIT 1) AS questionVoiceId "
+      + ", CASE WHEN t.code='literature_translation' THEN (SELECT v.id FROM question_voices v WHERE v.question_id IS NULL AND v.kind='translation_prompt' AND v.status='ready' AND v.output_path IS NOT NULL ORDER BY RAND() LIMIT 1) ELSE (SELECT v.id FROM question_voices v WHERE v.question_id=q.id AND v.kind='generated' AND v.status='ready' AND v.output_path IS NOT NULL ORDER BY RAND() LIMIT 1) END AS questionVoiceId "
       + 'FROM questions q JOIN question_types t ON t.id = q.type_id '
       + 'WHERE ' + conditions.join(' AND ') + ' ORDER BY RAND() LIMIT 1';
     const rows = await query(sql, values);
     const row = rows[0];
-    if (row) return Response.json({ question: { ...row, questionVoiceUrl: row.questionVoiceId ? `/api/question-voices/${Number(row.questionVoiceId)}/audio?kind=output` : null } });
+    if (row) return Response.json({ question: { ...row, suppressBrowserRead: String(row.typeCode) === 'literature_translation', questionVoiceUrl: row.questionVoiceId ? `/api/question-voices/${Number(row.questionVoiceId)}/audio?kind=output` : null } });
     return Response.json({ error: avoidRepeated ? '该分类暂无未练习题目' : '该分类暂无题目' }, { status: 404 });
   } catch (error) { return apiError(error); }
 }
