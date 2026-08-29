@@ -1,5 +1,6 @@
 import { apiError, requireUser } from "@/lib/auth";
 import { execute, query } from "@/lib/db";
+import { fixedQuestionContentHash } from '@/lib/simulation-fixed-voices';
 import type { RowDataPacket } from "mysql2/promise";
 
 type Module = {
@@ -68,9 +69,15 @@ export async function POST(request: Request) {
               { error: "固定题目或开场任务缺少题目内容，请在模拟配置中补充" },
               { status: 400 },
             );
+          const fixedVoices = await query<RowDataPacket[]>(`SELECT id FROM simulation_fixed_voices
+            WHERE template_id = ? AND module_id = ? AND content_hash = ?
+              AND status = 'ready' AND output_path IS NOT NULL
+            ORDER BY RAND() LIMIT 1`, [Number(template.id), String(module.id || ''), fixedQuestionContentHash(prompt)]);
           steps.push({
             ...module,
             id: module.id + "-" + index,
+            templateModuleId: module.id,
+            questionVoiceUrl: fixedVoices[0] ? `/api/simulation-fixed-voices/${Number(fixedVoices[0].id)}/audio` : null,
             question: prompt,
             category: module.kind === "fixed" ? "固定题目" : "开场任务",
           });

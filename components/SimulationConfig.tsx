@@ -200,7 +200,7 @@ export default function SimulationConfig() {
     setSaving(true);
     setMessage("");
     try {
-      await requestJson("/api/simulations/config", {
+      const saved = await requestJson("/api/simulations/config", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -210,7 +210,17 @@ export default function SimulationConfig() {
           },
         }),
       });
-      setMessage("模拟流程已保存。");
+      const savedTemplateId = Number(selected.id) || Number((saved.templates || []).find((item: SimulationTemplate) => item.name === selected.name)?.id);
+      if (savedTemplateId) {
+        setMessage("模拟流程已保存，正在按当前配置预生成固定题音频…");
+        try {
+          const sync = await requestJson(`/api/simulations/config/${savedTemplateId}/sync-fixed-voices`, { method: "POST" });
+          if (sync.browser) setMessage("模拟流程已保存。当前使用浏览器朗读，未新增固定题音频；已有同文本配音仍会随机播放。");
+          else setMessage(`模拟流程已保存。固定题音频：新增 ${Number(sync.generated) || 0} 条，已存在 ${Number(sync.skipped) || 0} 条，失败 ${Number(sync.failed) || 0} 条。`);
+        } catch (error) {
+          setMessage(`模拟流程已保存，但固定题音频预生成未完成：${(error as Error).message}`);
+        }
+      } else setMessage("模拟流程已保存，但未能定位流程 ID，固定题音频暂未预生成。");
       await load();
     } catch (error) {
       setMessage((error as Error).message);
@@ -391,6 +401,7 @@ export default function SimulationConfig() {
                 />
               </label>
               <section className="dynamic-tts-config">
+                <p className="field-hint">现场 AI 题目和追问会严格使用当前配置实时合成，并保存到本次记录；保存流程时，开场和固定题会按当前配置预生成新音频。文本未变的历史音频始终保留，模拟时会随机播放其中任一条。</p>
                 <div><b>现场 AI 题目朗读</b><small>适用于自由交流和老师追问等现场生成的问题；生成的音频会随本次模拟记录保存。</small></div>
                 <label>朗读来源<select value={dynamicTts.provider} onChange={(event) => updateDynamicTts({ provider: event.target.value as DynamicTtsConfig["provider"] })}><option value="browser">浏览器朗读（不调用 TTS API）</option><option value="bailian">百炼语音合成</option><option value="baidu">百度短文本合成</option></select></label>
                 {dynamicTts.provider === "bailian" && <>

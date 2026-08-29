@@ -190,6 +190,24 @@ const schema = [
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE KEY uq_simulation_template_name (name)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE TABLE IF NOT EXISTS simulation_fixed_voices (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    template_id BIGINT UNSIGNED NOT NULL,
+    module_id VARCHAR(160) NOT NULL,
+    content_hash CHAR(64) NOT NULL,
+    config_hash CHAR(64) NOT NULL,
+    provider VARCHAR(30) NOT NULL,
+    model VARCHAR(150) NULL,
+    parameters JSON NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'processing',
+    output_path VARCHAR(500) NULL,
+    output_mime VARCHAR(120) NULL,
+    error TEXT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_simulation_fixed_voice_variant (template_id, module_id, content_hash, config_hash),
+    INDEX idx_simulation_fixed_voice_lookup (template_id, module_id, content_hash, status)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS realtime_asr_settings (
     id TINYINT UNSIGNED NOT NULL PRIMARY KEY,
     provider VARCHAR(50) NOT NULL DEFAULT 'bailian',
