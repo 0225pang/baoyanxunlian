@@ -34,10 +34,17 @@ export async function POST(request: Request) {
     const user = await requireUser();
     const data = await request.formData();
     const questionId = Number(data.get('questionId'));
-    const category = String(data.get('category') || '');
-    const question = String(data.get('question') || '').trim();
+    let category = String(data.get('category') || '');
+    let question = String(data.get('question') || '').trim();
     const answer = String(data.get('answer') || '').trim() || '本次为口述作答，未填写文字提纲。';
-    if (!questionId || !['专业问题', '英语问答问题', '综合面试问题', '专业素养', '英语能力', '综合面试'].includes(category) || !question) return Response.json({ error: '作答数据不完整' }, { status: 400 });
+    if (!Number.isInteger(questionId) || questionId < 1) return Response.json({ error: '题目参数无效，请重新选择题目后提交。' }, { status: 400 });
+    // Do not maintain a hard-coded category allowlist here. New question types
+    // (for example literature translation and ideology) are valid automatically.
+    const questionRows = await query(`SELECT q.content, t.name AS category FROM questions q JOIN question_types t ON t.id=q.type_id WHERE q.id=? AND q.status='active' AND t.is_active=1 LIMIT 1`, [questionId]);
+    const storedQuestion = questionRows[0] as { content?: string; category?: string } | undefined;
+    if (!storedQuestion?.content || !storedQuestion.category) return Response.json({ error: '题目不存在或已停用，请返回题库重新选择。' }, { status: 400 });
+    category = String(storedQuestion.category);
+    question = String(storedQuestion.content);
 
     const audio = data.get('audio');
     let audioData: Buffer | null = null;
