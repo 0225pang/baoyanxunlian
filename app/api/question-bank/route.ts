@@ -2,6 +2,7 @@ import * as XLSX from 'xlsx';
 import type { RowDataPacket } from 'mysql2/promise';
 import { apiError, requireUser } from '@/lib/auth';
 import { execute, query } from '@/lib/db';
+import { regenerateQuestionVoiceVariants } from '@/lib/question-voices';
 
 type QuestionPayload = {
   typeId?: number;
@@ -137,11 +138,20 @@ export async function PATCH(request: Request) {
     if (!Number.isInteger(id) || !Number.isInteger(typeId) || !content) return Response.json({ error: '题目参数不完整' }, { status: 400 });
     if (!(await typeExists(typeId))) return Response.json({ error: '题型不存在或已停用' }, { status: 400 });
     if (await questionIdWithContent(content, id)) return Response.json({ error: '\u9898\u76ee\u5185\u5bb9\u5df2\u5b58\u5728\uff0c\u672a\u4fdd\u5b58\u91cd\u590d\u9898\u76ee' }, { status: 409 });
+    const originalRows = await query<RowDataPacket[]>('SELECT content FROM questions WHERE id = ? LIMIT 1', [id]);
+    const contentChanged = Boolean(originalRows[0]) && String(originalRows[0].content || '').trim() !== content;
+    const variants = contentChanged ? await query<RowDataPacket[]>(`SELECT id, name, provider, model, voice_id AS voiceId, parameters
+      FROM question_voices WHERE question_id = ? AND kind = 'generated' AND status = 'ready' AND output_path IS NOT NULL ORDER BY id ASC`, [id]) : [];
     const result = await execute('UPDATE questions SET type_id = ?, content = ?, answer = ?, subcategory = ?, extra = ?, status = ? WHERE id = ?', [
       typeId, content, String(data.answer || '').trim() || null, String(data.subcategory || '').trim() || null, parseExtra(data.extra), ['active', 'draft', 'archived'].includes(String(data.status)) ? String(data.status) : 'active', id,
     ]);
     if (!result.affectedRows) return Response.json({ error: '题目不存在' }, { status: 404 });
-    return Response.json({ ok: true });
+    if (!contentChanged || !variants.length) return Response.json({ ok: true, contentChanged, voiceRegeneration: { found: 0, generated: 0, failed: 0 } });
+    // Old records remain available in the admin voice library, but are no
+    // longer eligible for random playback because their text is stale.
+    await execute("UPDATE question_voices SET status = 'superseded' WHERE question_id = ? AND kind = 'generated' AND status = 'ready' AND output_path IS NOT NULL", [id]);
+    const regenerated = await regenerateQuestionVoiceVariants(id, content, variants.map((voice) => ({ id: Number(voice.id), name: String(voice.name), provider: String(voice.provider), model: String(voice.model), voiceId: voice.voiceId === null ? null : String(voice.voiceId), parameters: voice.parameters })));
+    return Response.json({ ok: true, contentChanged, voiceRegeneration: { found: variants.length, ...regenerated } });
   } catch (error) { return apiError(error); }
 }
 

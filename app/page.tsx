@@ -2846,13 +2846,19 @@ function QuestionBank() {
     event.preventDefault();
     if (!editor) return;
     try {
-      await jsonFetch("/api/question-bank", {
+      const result = await jsonFetch("/api/question-bank", {
         method: editor.id ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(editor),
       });
       setEditor(null);
       setMessage("题目已保存");
+      const regeneration = result.voiceRegeneration;
+      if (regeneration?.found) {
+        const text = `题目已保存；已按原配置重生成 ${regeneration.generated || 0}/${regeneration.found} 条配音${regeneration.failed ? `，${regeneration.failed} 条失败，请在题目语音管理查看原因` : ''}。`;
+        setMessage(text);
+        void pushNotification({ kind: regeneration.failed ? 'warning' : 'success', title: regeneration.failed ? '题目配音部分重生成失败' : '题目配音已重生成', content: text }).catch(() => undefined);
+      }
       await load(page);
     } catch (error) {
       setMessage((error as Error).message);

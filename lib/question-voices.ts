@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { WebSocket } from 'ws';
-import { query } from '@/lib/db';
+import { execute, query } from '@/lib/db';
 import type { RowDataPacket } from 'mysql2/promise';
 
 export type TtsSettings = {
@@ -131,6 +131,15 @@ export async function createClonedVoice(settings: TtsSettings, prefix: string, u
 
 type SynthesisInput = { provider?: 'bailian' | 'baidu'; text: string; model: string; voiceId: string; parameters: Record<string, unknown> };
 
+export type GeneratedQuestionVoiceSnapshot = {
+  id: number;
+  name: string;
+  provider: string;
+  model: string;
+  voiceId: string | null;
+  parameters: unknown;
+};
+
 let baiduTokenCache: { token: string; expiresAt: number; apiKey: string } | null = null;
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number) {
@@ -248,6 +257,41 @@ export async function synthesizeVoice(settings: TtsSettings, input: SynthesisInp
   const audioResponse = await fetch(audioUrl);
   if (!audioResponse.ok) throw new Error(`下载生成音频失败：${await responseError(audioResponse)}`);
   return { audio: Buffer.from(await audioResponse.arrayBuffer()), mime: (audioResponse.headers.get('content-type') || 'audio/mpeg').split(';')[0] };
+}
+
+function savedParameters(value: unknown): Record<string, unknown> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(String(value || '{}'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch { return {}; }
+}
+
+/** Recreate a changed question's voice variants from their stored original configuration. */
+export async function regenerateQuestionVoiceVariants(questionId: number, text: string, variants: GeneratedQuestionVoiceSnapshot[]) {
+  const settings = await getTtsSettings();
+  const result = { generated: 0, failed: 0 };
+  for (const variant of variants) {
+    const provider = variant.provider === 'baidu' ? 'baidu' : 'bailian';
+    const model = String(variant.model || '').trim();
+    const voiceId = String(variant.voiceId || '').trim();
+    const parameters = savedParameters(variant.parameters);
+    const name = String(variant.name || '重新生成的题目配音').trim().slice(0, 160) || '重新生成的题目配音';
+    const created = await execute('INSERT INTO question_voices (question_id,name,kind,provider,status,model,voice_id,parameters,public_token) VALUES (?,?,?,?,?,?,?,?,?)', [questionId, name, 'generated', provider, 'processing', model, voiceId, JSON.stringify(parameters), createPublicToken()]);
+    const id = Number(created.insertId);
+    try {
+      const audio = await synthesizeVoice(settings, { provider, text, model, voiceId, parameters });
+      const extension = audio.mime === 'audio/wav' ? 'wav' : audio.mime === 'audio/pcm' ? 'pcm' : 'mp3';
+      const outputPath = await storeQuestionVoiceFile(id, `speech.${extension}`, audio.audio, 'output');
+      await execute("UPDATE question_voices SET status = 'ready', output_path = ?, output_mime = ?, error = NULL WHERE id = ?", [outputPath, audio.mime, id]);
+      result.generated += 1;
+    } catch (error) {
+      const message = error instanceof Error ? error.message.slice(0, 3000) : '题目配音重新生成失败';
+      await execute("UPDATE question_voices SET status = 'failed', error = ? WHERE id = ?", [message, id]);
+      result.failed += 1;
+    }
+  }
+  return result;
 }
 
 export async function synthesizeConfiguredQuestionVoice(config: unknown, text: string) {
