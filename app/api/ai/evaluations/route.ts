@@ -2,6 +2,7 @@ import { apiError, requireUser } from '@/lib/auth';
 import { execute, query } from '@/lib/db';
 import { chatCompletionsUrl, extractChatContent, getActiveAiConfig, hashEvaluationInput, safeJsonParse, type ActiveAiConfig } from '@/lib/ai';
 import { assertApiAccess, logApiUsage, readTokenUsage } from '@/lib/usage';
+import { createUserNotification } from '@/lib/notifications';
 import type { RowDataPacket } from 'mysql2/promise';
 
 type EvaluationInput = {
@@ -41,9 +42,11 @@ async function runEvaluation(evaluationId: number, userId: number, questionId: n
     await execute('INSERT INTO ai_messages (user_id, question_id, evaluation_id, role, content) VALUES (?, ?, ?, ?, ?)', [userId, questionId, evaluationId, 'assistant', result]);
     const usage = readTokenUsage(payload);
     await logApiUsage(userId, 'ai', { inputTokens: usage.inputTokens || Math.ceil(prompt.length / 2), outputTokens: usage.outputTokens || Math.ceil(result.length / 2), model: config.model });
+    await createUserNotification(userId, 'AI 复盘已生成', '本题的 AI 复盘已完成，可前往复盘页面查看并继续追问。', 'success');
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await execute('UPDATE ai_evaluations SET status = \'failed\', error = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?', [message.slice(0, 2000), evaluationId]).catch(() => undefined);
+    await createUserNotification(userId, 'AI 复盘生成失败', `本题复盘未完成：${message.slice(0, 300)}`, 'error');
   }
 }
 

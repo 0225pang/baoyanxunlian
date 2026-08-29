@@ -9,6 +9,7 @@ import {
 } from '@/lib/asr';
 import type { RowDataPacket } from 'mysql2/promise';
 import { assertApiAccess, logApiUsage } from '@/lib/usage';
+import { createUserNotification } from '@/lib/notifications';
 
 export const runtime = 'nodejs';
 
@@ -105,12 +106,14 @@ async function transcribeInBackground(id: number, userId: number, audioUrl: stri
       'UPDATE practice_records SET transcript = ?, transcript_segments = ?, transcript_status = \'completed\', transcript_error = NULL, transcribed_at = CURRENT_TIMESTAMP WHERE id = ?',
       [transcript, transcriptSegments.length ? JSON.stringify(transcriptSegments) : null, id],
     );
+    await createUserNotification(userId, '文字稿转录完成', `第 ${id} 条作答的文字稿已生成，可前往作答记录查看与复盘。`, 'success');
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await execute(
       'UPDATE practice_records SET transcript_status = \'failed\', transcript_error = ? WHERE id = ?',
       [message.slice(0, 1000), id],
     ).catch(() => undefined);
+    await createUserNotification(userId, '文字稿转录失败', `第 ${id} 条作答转录失败：${message.slice(0, 300)}`, 'error');
   }
 }
 

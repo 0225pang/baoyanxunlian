@@ -6,6 +6,8 @@ import UsageManagement from "@/components/UsageManagement";
 import SimulationConfig from "@/components/SimulationConfig";
 import SimulationHistory from "@/components/SimulationHistory";
 import QuestionVoiceManagement from "@/components/QuestionVoiceManagement";
+import NotificationBell from "@/components/NotificationBell";
+import { pushNotification } from "@/lib/notifications-client";
 
 import { ChangeEvent, FormEvent, MouseEvent, useCallback, useEffect, useRef, useState } from "react";
 
@@ -587,10 +589,13 @@ export default function Home() {
             </button>
           )}
         </nav>
-        <button className="user-chip" onClick={logout}>
-          {user.displayName}
-          <small>退出</small>
-        </button>
+        <div className="account-actions">
+          <NotificationBell />
+          <button className="user-chip" onClick={logout}>
+            {user.displayName}
+            <small>退出</small>
+          </button>
+        </div>
       </header>
       {message && <div className="notice">{message}</div>}
 
@@ -2923,6 +2928,7 @@ function QuestionBank() {
       const result = await jsonFetch("/api/question-bank", { method: "PUT", body: form });
       setImportOpen(false); setImportPreview(null); setImportFile(null);
       setMessage("已导入 " + result.imported + " 条题目" + (result.skipped ? "，自动跳过 " + result.skipped + " 行（含重复或空白）" : ""));
+      void pushNotification({ kind: result.errors?.length ? "warning" : "success", title: "题库导入完成", content: `已导入 ${result.imported} 条${result.skipped ? `，跳过 ${result.skipped} 行（重复或空白）` : ""}${result.errors?.length ? `，${result.errors.length} 行导入失败` : ""}。` }).catch(() => undefined);
       await load(1);
     } catch (error) { setMessage((error as Error).message); }
     finally { setImporting(false); }

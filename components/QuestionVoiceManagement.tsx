@@ -2,6 +2,7 @@
 'use client';
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { pushNotification } from '@/lib/notifications-client';
 
 type Provider = 'bailian' | 'baidu';
 type Settings = { publicBaseUrl: string; cloneUrl: string; websocketUrl: string; sambertWebsocketUrl: string; synthesisUrl: string; baiduTtsUrl: string; baiduCloneUrl: string; apiKey?: string; apiKeySet?: boolean; apiKeyPreview?: string; sambertApiKey?: string; sambertApiKeySet?: boolean; sambertApiKeyPreview?: string; baiduApiKey?: string; baiduApiKeySet?: boolean; baiduApiKeyPreview?: string; baiduSecretKey?: string; baiduSecretKeySet?: boolean; baiduSecretKeyPreview?: string };
@@ -52,11 +53,12 @@ export default function QuestionVoiceManagement() {
     return { action: 'synthesize', provider, questionId: id, name: name.trim(), model: selectedModel, voiceId: selectedVoiceId, parameters };
   }
   async function synthesize(id: number) { return requestJson('/api/question-voices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildPayload(id)) }); }
-  async function generateCurrent() { setBusy(true); try { const result = await synthesize(Number(questionId)); setData(result.state); setMessage(result.skipped ? '当前题目在该平台已有同名配音，已跳过。' : '题目配音已生成。'); } catch (error) { setMessage((error as Error).message); } finally { setBusy(false); } }
+  async function generateCurrent() { setBusy(true); try { const result = await synthesize(Number(questionId)); setData(result.state); const question = data?.questions.find((item) => item.id === Number(questionId)); const text = result.skipped ? '当前题目在该平台已有同名配音，已跳过。' : '题目配音已生成。'; setMessage(text); void pushNotification({ kind: result.skipped ? 'info' : 'success', title: result.skipped ? '题目配音已跳过' : '题目配音已生成', content: `${question?.content.slice(0, 50) || '当前题目'}；配音名称：${name}。` }).catch(() => undefined); } catch (error) { const text = (error as Error).message; setMessage(text); void pushNotification({ kind: 'error', title: '题目配音失败', content: text }).catch(() => undefined); } finally { setBusy(false); } }
   async function generateAll() {
     if (!data) return; setBatchConfirmOpen(false); cancelBatchRef.current = false; setBusy(true);
-    try { for (let index = 0; index < data.questions.length && !cancelBatchRef.current; index += 1) { setMessage(`正在生成 ${index + 1}/${data.questions.length}；可停止剩余队列。`); const result = await synthesize(data.questions[index].id); setData(result.state); } setMessage(cancelBatchRef.current ? '已停止队列；当前请求完成前无法中断，已完成的音频会保留。' : '批量配音完成。'); }
-    catch (error) { setMessage((error as Error).message); } finally { setBusy(false); }
+    let generated = 0; let skipped = 0; let failed = 0; let processed = 0;
+    try { for (let index = 0; index < data.questions.length && !cancelBatchRef.current; index += 1) { setMessage(`正在处理 ${index + 1}/${data.questions.length}（包含可能跳过的已有配音）；可停止剩余队列。`); try { const result = await synthesize(data.questions[index].id); setData(result.state); processed += 1; if (result.skipped) skipped += 1; else generated += 1; } catch { processed += 1; failed += 1; } } const content = `队列共 ${data.questions.length} 道，已处理 ${processed} 道：新生成 ${generated}，已跳过 ${skipped}，失败 ${failed}${cancelBatchRef.current ? '；已停止剩余队列' : ''}。`; setMessage(content); void pushNotification({ kind: failed ? 'warning' : 'success', title: cancelBatchRef.current ? '批量配音已停止' : '批量配音完成', content }).catch(() => undefined); }
+    catch (error) { const text = (error as Error).message; setMessage(text); void pushNotification({ kind: 'error', title: '批量配音异常中断', content: text }).catch(() => undefined); } finally { setBusy(false); }
   }
   async function deleteVoice(id: number) { if (!confirm('确定删除这条语音记录及其本地音频文件吗？')) return; try { setData(await requestJson(`/api/question-voices?id=${id}`, { method: 'DELETE' })); setMessage('已删除。'); } catch (error) { setMessage((error as Error).message); } }
   async function retryClone(id: number) { setBusy(true); try { const result = await requestJson('/api/question-voices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'retry-clone', id }) }); setData(result.state); setMessage('已重新创建复刻音色。'); } catch (error) { setMessage((error as Error).message); } finally { setBusy(false); } }

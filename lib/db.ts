@@ -109,6 +109,18 @@ const schema = [
     name VARCHAR(120) NOT NULL PRIMARY KEY,
     applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE TABLE IF NOT EXISTS user_notifications (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT UNSIGNED NOT NULL,
+    kind VARCHAR(30) NOT NULL DEFAULT 'info',
+    title VARCHAR(180) NOT NULL,
+    content TEXT NULL,
+    is_read TINYINT(1) NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    read_at DATETIME NULL,
+    INDEX idx_user_notifications_user_created (user_id, created_at),
+    INDEX idx_user_notifications_user_read (user_id, is_read)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS asr_settings (
     id TINYINT UNSIGNED NOT NULL PRIMARY KEY,
     provider VARCHAR(50) NOT NULL DEFAULT 'bailian',
