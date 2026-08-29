@@ -15,6 +15,7 @@ export type TtsSettings = {
   baiduApiKey: string;
   baiduSecretKey: string;
   baiduTtsUrl: string;
+  baiduCloneUrl: string;
   apiKey: string;
   publicBaseUrl: string;
   cloneModel: string;
@@ -50,6 +51,7 @@ export async function getTtsSettings(): Promise<TtsSettings> {
     websocket_url AS websocketUrl, sambert_websocket_url AS sambertWebsocketUrl,
     sambert_api_key AS sambertApiKey, baidu_api_key AS baiduApiKey,
     baidu_secret_key AS baiduSecretKey, baidu_tts_url AS baiduTtsUrl,
+    baidu_clone_url AS baiduCloneUrl,
     api_key AS apiKey, public_base_url AS publicBaseUrl,
     clone_model AS cloneModel, clone_target_model AS cloneTargetModel, default_model AS defaultModel
     FROM tts_settings WHERE id = 1 LIMIT 1`);
@@ -68,6 +70,7 @@ export async function getTtsSettings(): Promise<TtsSettings> {
     baiduApiKey: String(row.baiduApiKey || '').trim(),
     baiduSecretKey: String(row.baiduSecretKey || '').trim(),
     baiduTtsUrl: clean(row.baiduTtsUrl || 'https://tsn.baidu.com/text2audio'),
+    baiduCloneUrl: clean(row.baiduCloneUrl || 'https://aip.baidubce.com/rest/2.0/speech/publiccloudspeech/v1/voice/clone/create'),
     apiKey: String(row.apiKey || '').trim(), publicBaseUrl: clean(row.publicBaseUrl),
     cloneModel: clean(row.cloneModel || 'voice-enrollment'),
     cloneTargetModel: clean(row.cloneTargetModel || 'qwen-audio-3.0-tts-flash'),
@@ -144,6 +147,22 @@ async function getBaiduAccessToken(settings: TtsSettings) {
   if (!response.ok || !payload.access_token) throw new Error(`百度 Access Token 获取失败：${payload.error_description || payload.error || `HTTP ${response.status}`}`);
   baiduTokenCache = { token: payload.access_token, apiKey: settings.baiduApiKey, expiresAt: Date.now() + Math.max(60, (Number(payload.expires_in) || 0) - 60) * 1000 };
   return payload.access_token;
+}
+
+export async function createBaiduClonedVoice(settings: TtsSettings, voiceName: string, audio: Buffer, options?: { description?: string; language?: string }) {
+  if (!settings.baiduCloneUrl) throw new Error('请先配置百度声音复刻 API 地址。');
+  if (audio.length > 5 * 1024 * 1024) throw new Error('百度声音样本不能超过 5MB。');
+  const token = await getBaiduAccessToken(settings);
+  const response = await fetch(`${settings.baiduCloneUrl}${settings.baiduCloneUrl.includes('?') ? '&' : '?'}access_token=${encodeURIComponent(token)}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ voice_name: voiceName, voice_desc: String(options?.description || '').trim() || undefined, lang: options?.language === 'ja' ? 'ja' : 'zh', audio_file: audio.toString('base64') }),
+  });
+  const payload = await response.json().catch(() => ({})) as { status?: number; message?: string; data?: { voice_id?: string | number }; voice_id?: string | number };
+  const voiceId = payload.data?.voice_id ?? payload.voice_id;
+  if (!response.ok || Number(payload.status) !== 0 || voiceId === undefined || voiceId === null || String(voiceId).trim() === '') {
+    throw new Error(`百度声音复刻失败：${payload.message || `HTTP ${response.status}`}`);
+  }
+  return { voiceId: String(voiceId), payload };
 }
 
 async function synthesizeBaiduVoice(settings: TtsSettings, input: SynthesisInput) {
