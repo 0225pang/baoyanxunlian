@@ -12,6 +12,7 @@ import { pushNotification } from "@/lib/notifications-client";
 import { ChangeEvent, FormEvent, MouseEvent, useCallback, useEffect, useRef, useState } from "react";
 
 type Category = string;
+type BrowserKey = "chrome" | "edge" | "quark" | "browser360" | "lenovo";
 type User = {
   id: number;
   username: string;
@@ -4035,7 +4036,7 @@ function Settings({
   const [guideOpen, setGuideOpen] = useState(false);
   const [origin, setOrigin] = useState("");
   const [copied, setCopied] = useState(false);
-  const [browserHint, setBrowserHint] = useState<"chrome" | "edge" | null>(
+  const [browserHint, setBrowserHint] = useState<BrowserKey | null>(
     null,
   );
   const [copiedBrowserUrl, setCopiedBrowserUrl] = useState(false);
@@ -4045,6 +4046,9 @@ function Settings({
   const browserUrls = {
     chrome: "chrome://flags/#unsafely-treat-insecure-origin-as-secure",
     edge: "edge://flags/#unsafely-treat-insecure-origin-as-secure",
+    quark: "quark://flags/#unsafely-treat-insecure-origin-as-secure",
+    browser360: "chrome://flags/#unsafely-treat-insecure-origin-as-secure",
+    lenovo: "chrome://flags/#unsafely-treat-insecure-origin-as-secure",
   } as const;
 
   useEffect(() => {
@@ -4128,7 +4132,7 @@ function Settings({
     setCopiedBrowserUrl(true);
     window.setTimeout(() => setCopiedBrowserUrl(false), 2200);
   }
-  function openBrowserSettings(browser: "chrome" | "edge") {
+  function openBrowserSettings(browser: BrowserKey) {
     const url = browserUrls[browser];
     setBrowserHint(browser);
     setCopiedBrowserUrl(false);
@@ -4287,6 +4291,15 @@ function Settings({
               </button>
               <button type="button" onClick={() => openBrowserSettings("edge")}>
                 打开 Edge 设置
+              </button>
+              <button type="button" onClick={() => openBrowserSettings("quark")}>
+                打开夸克设置
+              </button>
+              <button type="button" onClick={() => openBrowserSettings("browser360")}>
+                打开 360 设置
+              </button>
+              <button type="button" onClick={() => openBrowserSettings("lenovo")}>
+                打开联想设置
               </button>
             </div>
             {browserHint && (
