@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="640" height="170" viewBox="0 0 640 170" role="img" aria-labelledby="title desc">
   <title id="title">小鱼食品保研</title>
   <desc id="desc">FOOD POSTGRAD STUDIO</desc>
-  <g transform="translate(-498 -38) skewX(-3)">
-    <text x="540" y="110" fill="#173f59" font-family="'STKaiti','KaiTi','FZKai-Z03','Noto Serif SC','Songti SC',serif" font-size="64" font-weight="600" letter-spacing="7">小鱼食品保研</text>
-    <path d="M542 148c112 15 257 15 418 0" fill="none" stroke="#e9a487" stroke-width="5" stroke-linecap="round"/>
-    <text x="543" y="197" fill="#66818b" font-family="'Bradley Hand','Segoe Print','Comic Sans MS',cursive" font-size="34" font-style="italic" letter-spacing="3">FOOD POSTGRAD STUDIO</text>
+  <g transform="skewX(-3)">
+    <text x="324" y="72" text-anchor="middle" fill="#173f59" font-family="'STKaiti','KaiTi','FZKai-Z03','Noto Serif SC','Songti SC',serif" font-size="64" font-weight="600" letter-spacing="7">小鱼食品保研</text>
+    <path d="M64 105c145 15 330 15 520 0" fill="none" stroke="#e9a487" stroke-width="5" stroke-linecap="round"/>
+    <text x="328" y="145" text-anchor="middle" fill="#66818b" font-family="'Bradley Hand','Segoe Print','Comic Sans MS',cursive" font-size="34" font-style="italic" letter-spacing="3">FOOD POSTGRAD STUDIO</text>
   </g>
 </svg>
