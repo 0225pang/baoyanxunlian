@@ -136,6 +136,12 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
   return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
 }
 
+function normalizeBaiduSpeakerId(value: unknown) {
+  const speakerId = String(value ?? '').trim();
+  if (!/^\d{1,18}$/.test(speakerId)) throw new Error('百度发音人 per 或复刻音色 ID 必须是有效的数字。');
+  return speakerId.replace(/^0+(?=\d)/, '');
+}
+
 async function getBaiduAccessToken(settings: TtsSettings) {
   if (!settings.baiduApiKey || !settings.baiduSecretKey) throw new Error('请先配置百度语音 API Key 与 Secret Key。');
   if (baiduTokenCache && baiduTokenCache.apiKey === settings.baiduApiKey && baiduTokenCache.expiresAt > Date.now()) return baiduTokenCache.token;
@@ -170,7 +176,7 @@ async function synthesizeBaiduVoice(settings: TtsSettings, input: SynthesisInput
   const format = String(input.parameters.format || 'mp3').toLowerCase();
   const aue = format === 'wav' ? '6' : format === 'pcm' ? '4' : '3';
   const form = new URLSearchParams({
-    tex: input.text, tok: token, cuid: 'baoyanxunlian-question-voice', ctp: '1', lan: 'zh', per: String(Math.round(clampNumber(input.parameters.per, 0, 50000, 1))), aue,
+    tex: input.text, tok: token, cuid: 'baoyanxunlian-question-voice', ctp: '1', lan: 'zh', per: normalizeBaiduSpeakerId(input.parameters.per ?? 1), aue,
     spd: String(Math.round(clampNumber(input.parameters.spd, 0, 15, 5))),
     pit: String(Math.round(clampNumber(input.parameters.pit, 0, 15, 5))),
     vol: String(Math.round(clampNumber(input.parameters.volume, 0, 9, 5))),
@@ -221,7 +227,7 @@ export async function synthesizeConfiguredQuestionVoice(config: unknown, text: s
   const model = provider === 'baidu' ? 'baidu-duxiaoyu' : String(value.model || (usingClone ? settings.defaultModel : 'sambert-zhida-v1')).trim();
   if (usingClone && model.startsWith('sambert-')) throw new Error('复刻音色需要使用 Qwen-Audio-TTS 模型，不能使用 Sambert 模型。');
   const parameters = provider === 'baidu'
-    ? { per: Number(value.per) || 1, spd: 5, pit: 5, volume: 5, format: 'mp3' }
+    ? { per: String(value.per || '1'), spd: 5, pit: 5, volume: 5, format: 'mp3' }
     : { speech_rate: Number(value.rate) || 1, pitch_rate: Number(value.pitch) || 1, volume: Number(value.volume) || 50, format: 'mp3' };
   return synthesizeVoice(settings, { provider, text, model, voiceId, parameters });
 }

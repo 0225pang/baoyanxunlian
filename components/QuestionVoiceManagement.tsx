@@ -50,7 +50,7 @@ export default function QuestionVoiceManagement() {
     let parsed: Record<string, unknown>;
     try { parsed = JSON.parse(extra || '{}'); if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') throw new Error(); } catch { throw new Error('额外参数必须是合法的 JSON 对象。'); }
     const parameters = provider === 'baidu'
-      ? { ...parsed, per: sourceMode === 'clone' ? Number(selectedVoiceId) : Number(baiduPer), spd: Number(baiduSpeed), pit: Number(baiduPitch), volume: Number(baiduVolume), format, emotion: baiduEmotion }
+      ? { ...parsed, per: sourceMode === 'clone' ? selectedVoiceId : baiduPer, spd: Number(baiduSpeed), pit: Number(baiduPitch), volume: Number(baiduVolume), format, emotion: baiduEmotion }
       : { ...parsed, speech_rate: Number(rate) || 1, pitch_rate: Number(pitch) || 1, volume: Number(volume) || 50, format, ...(sourceMode === 'clone' && instruction.trim() ? { instruction: instruction.trim() } : {}) };
     return { action: 'synthesize', provider, questionId: id, name: name.trim(), model: selectedModel, voiceId: selectedVoiceId, parameters };
   }
