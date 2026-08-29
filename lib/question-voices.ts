@@ -16,6 +16,7 @@ export type TtsSettings = {
   baiduSecretKey: string;
   baiduTtsUrl: string;
   baiduCloneUrl: string;
+  baiduCloneTtsUrl: string;
   apiKey: string;
   publicBaseUrl: string;
   cloneModel: string;
@@ -51,7 +52,7 @@ export async function getTtsSettings(): Promise<TtsSettings> {
     websocket_url AS websocketUrl, sambert_websocket_url AS sambertWebsocketUrl,
     sambert_api_key AS sambertApiKey, baidu_api_key AS baiduApiKey,
     baidu_secret_key AS baiduSecretKey, baidu_tts_url AS baiduTtsUrl,
-    baidu_clone_url AS baiduCloneUrl,
+    baidu_clone_url AS baiduCloneUrl, baidu_clone_tts_url AS baiduCloneTtsUrl,
     api_key AS apiKey, public_base_url AS publicBaseUrl,
     clone_model AS cloneModel, clone_target_model AS cloneTargetModel, default_model AS defaultModel
     FROM tts_settings WHERE id = 1 LIMIT 1`);
@@ -71,6 +72,7 @@ export async function getTtsSettings(): Promise<TtsSettings> {
     baiduSecretKey: String(row.baiduSecretKey || '').trim(),
     baiduTtsUrl: clean(row.baiduTtsUrl || 'https://tsn.baidu.com/text2audio'),
     baiduCloneUrl: clean(row.baiduCloneUrl || 'https://aip.baidubce.com/rest/2.0/speech/publiccloudspeech/v1/voice/clone/create'),
+    baiduCloneTtsUrl: clean(row.baiduCloneTtsUrl || 'https://aip.baidubce.com/rest/2.0/speech/publiccloudspeech/v1/voice/clone/tts'),
     apiKey: String(row.apiKey || '').trim(), publicBaseUrl: clean(row.publicBaseUrl),
     cloneModel: clean(row.cloneModel || 'voice-enrollment'),
     cloneTargetModel: clean(row.cloneTargetModel || 'qwen-audio-3.0-tts-flash'),
@@ -194,8 +196,40 @@ async function synthesizeBaiduVoice(settings: TtsSettings, input: SynthesisInput
   return { audio: Buffer.from(await response.arrayBuffer()), mime };
 }
 
+async function synthesizeBaiduClonedVoice(settings: TtsSettings, input: SynthesisInput) {
+  const token = await getBaiduAccessToken(settings);
+  const voiceId = Number(normalizeBaiduSpeakerId(input.voiceId || input.parameters.per));
+  if (!Number.isSafeInteger(voiceId)) throw new Error('百度复刻音色 ID 超出接口支持范围。');
+  if (input.text.length > 500) throw new Error('百度复刻音色单次合成最多支持 500 个字符，请缩短题目或改用预设音色。');
+  const requestedFormat = String(input.parameters.format || 'wav').toLowerCase();
+  const mediaType = requestedFormat === 'mp3' ? 'mp3' : 'wav';
+  const payload: Record<string, unknown> = {
+    text: input.text,
+    voice_id: voiceId,
+    lang: input.parameters.lang === 'ja' ? 'ja' : 'zh',
+    speed: clampNumber(input.parameters.spd ?? input.parameters.speed, 0, 15, 5),
+    pitch: clampNumber(input.parameters.pit ?? input.parameters.pitch, 0, 15, 5),
+    volume: clampNumber(input.parameters.volume, 0, 15, 5),
+    media_type: mediaType,
+  };
+  const emotion = String(input.parameters.emotion || '').trim();
+  const dialect = String(input.parameters.dialect || '').trim();
+  if (emotion && emotion !== 'neutral') payload.emotion = emotion;
+  if (dialect) payload.dialect = dialect;
+  if (emotion && dialect) throw new Error('百度复刻音色的 emotion 和 dialect 不能同时设置。');
+  const cloneTtsUrl = settings.baiduCloneTtsUrl || 'https://aip.baidubce.com/rest/2.0/speech/publiccloudspeech/v1/voice/clone/tts';
+  const response = await fetch(`${cloneTtsUrl}${cloneTtsUrl.includes('?') ? '&' : '?'}access_token=${encodeURIComponent(token)}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Accept: '*/*' }, body: JSON.stringify(payload),
+  });
+  const contentType = (response.headers.get('content-type') || '').toLowerCase();
+  if (!response.ok || !contentType.startsWith('audio/')) {
+    throw new Error(`百度复刻音色合成失败：${await responseError(response)}`);
+  }
+  return { audio: Buffer.from(await response.arrayBuffer()), mime: mediaType === 'mp3' ? 'audio/mpeg' : 'audio/wav' };
+}
+
 export async function synthesizeVoice(settings: TtsSettings, input: SynthesisInput) {
-  if (input.provider === 'baidu') return synthesizeBaiduVoice(settings, input);
+  if (input.provider === 'baidu') return input.model === 'baidu-voice-clone' || Boolean(input.voiceId) ? synthesizeBaiduClonedVoice(settings, input) : synthesizeBaiduVoice(settings, input);
   if (input.model.startsWith('sambert-')) return synthesizeSambertWebSocket(settings, input);
   if (!settings.apiKey) throw new Error('请先配置百炼 API Key。');
   if (settings.websocketUrl) return synthesizeQwenWebSocket(input, settings.websocketUrl, settings.apiKey);

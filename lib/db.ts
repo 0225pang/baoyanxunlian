@@ -267,6 +267,7 @@ const schema = [
     baidu_secret_key TEXT NULL,
     baidu_tts_url VARCHAR(500) NULL,
     baidu_clone_url VARCHAR(500) NULL,
+    baidu_clone_tts_url VARCHAR(500) NULL,
     api_key TEXT NULL,
     public_base_url VARCHAR(500) NULL,
     clone_model VARCHAR(150) NOT NULL DEFAULT 'voice-enrollment',
@@ -441,6 +442,9 @@ async function ensureQuestionVoiceColumns(db: Pool) {
   if (!(await hasColumn(db, 'tts_settings', 'baidu_clone_url'))) {
     await db.query("ALTER TABLE tts_settings ADD COLUMN baidu_clone_url VARCHAR(500) NULL AFTER baidu_tts_url");
   }
+  if (!(await hasColumn(db, 'tts_settings', 'baidu_clone_tts_url'))) {
+    await db.query("ALTER TABLE tts_settings ADD COLUMN baidu_clone_tts_url VARCHAR(500) NULL AFTER baidu_clone_url");
+  }
   if (!(await hasColumn(db, 'question_voices', 'provider'))) {
     await db.query("ALTER TABLE question_voices ADD COLUMN provider VARCHAR(30) NOT NULL DEFAULT 'bailian' AFTER kind");
     await db.query("UPDATE question_voices SET provider='bailian' WHERE provider IS NULL OR provider='' ");
@@ -613,7 +617,7 @@ async function initializeDatabase(db: Pool) {
   }
   const [ttsRows] = await db.query<RowDataPacket[]>('SELECT COUNT(*) AS count FROM tts_settings');
   if (Number(ttsRows[0].count) === 0) {
-    await db.query('INSERT INTO tts_settings (id, provider, clone_url, synthesis_url, websocket_url, sambert_websocket_url, sambert_api_key, baidu_api_key, baidu_secret_key, baidu_tts_url, baidu_clone_url, api_key, public_base_url) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [
+    await db.query('INSERT INTO tts_settings (id, provider, clone_url, synthesis_url, websocket_url, sambert_websocket_url, sambert_api_key, baidu_api_key, baidu_secret_key, baidu_tts_url, baidu_clone_url, baidu_clone_tts_url, api_key, public_base_url) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [
       'bailian', process.env.DASHSCOPE_TTS_CLONE_URL || null,
       process.env.DASHSCOPE_TTS_URL || 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text2speech/speech-synthesis',
       process.env.DASHSCOPE_TTS_WS_URL || 'wss://dashscope.aliyuncs.com/api-ws/v1/inference/',
@@ -623,6 +627,7 @@ async function initializeDatabase(db: Pool) {
       process.env.BAIDU_TTS_SECRET_KEY || null,
       process.env.BAIDU_TTS_URL || 'https://tsn.baidu.com/text2audio',
       process.env.BAIDU_TTS_CLONE_URL || 'https://aip.baidubce.com/rest/2.0/speech/publiccloudspeech/v1/voice/clone/create',
+      process.env.BAIDU_TTS_CLONE_SYNTHESIS_URL || 'https://aip.baidubce.com/rest/2.0/speech/publiccloudspeech/v1/voice/clone/tts',
       process.env.DASHSCOPE_API_KEY || process.env.BAILIAN_API_KEY || null,
       process.env.TTS_PUBLIC_BASE_URL || process.env.ASR_PUBLIC_BASE_URL || null,
     ]);
