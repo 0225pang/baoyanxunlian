@@ -3931,6 +3931,9 @@ function TranscriptViewer({
           <p>
             {item.transcriptError || "自动转写失败，请联系管理员检查百炼配置。"}
           </p>
+          <button type="button" onClick={onTranscribe}>
+            重新尝试转写
+          </button>
         </div>
       </div>
     );
@@ -6480,6 +6483,10 @@ function AiConfig() {
                 }
                 placeholder="paraformer-v1"
               />
+              <small className="field-hint">
+                当前异步提交接口使用 <code>paraformer-v1</code>；<code>paraformer-v2</code>
+                在此接口或当前账号下不可用时会返回 Model not exist。
+              </small>
             </label>
             <label>
               提交接口地址
