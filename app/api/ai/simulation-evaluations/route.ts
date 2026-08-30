@@ -52,14 +52,14 @@ async function runEvaluation(evaluationId: number, generationToken: string, sess
     const response = await fetch(chatCompletionsUrl(config.baseUrl), { method: 'POST', headers: { Authorization: 'Bearer ' + config.apiKey, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: config.model, ...samplingParameters(config.model, 0.3), messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }] }) });
     const raw = await response.text(); const payload = safeJsonParse(raw); if (!response.ok) throw new Error(aiRequestError(response.status, raw));
     const result = extractChatContent(payload); if (!result) throw new Error('AI 返回内容为空');
-    const completed = await execute('UPDATE simulation_evaluations SET status = \'completed\', result = ?, error = NULL, completed_at = CURRENT_TIMESTAMP WHERE id = ? AND generation_token = ?', [result, evaluationId, generationToken]);
+    const completed = await execute('UPDATE simulation_evaluations SET status = \'completed\', result = ?, error = NULL, completed_at = CURRENT_TIMESTAMP WHERE id = ? AND generation_token = ? AND status = \'processing\'', [result, evaluationId, generationToken]);
     // A timed-out task may finish after a manual retry. Do not let its stale
     // response overwrite the newer attempt.
     if (!completed.affectedRows) return;
     await execute('INSERT INTO simulation_messages (session_id, user_id, evaluation_id, role, content) VALUES (?, ?, ?, ?, ?)', [Number(session.id), Number(session.userId), evaluationId, 'assistant', result]);
     const usage = readTokenUsage(payload); await logApiUsage(Number(session.userId), 'ai', { inputTokens: usage.inputTokens || Math.ceil(prompt.length / 2), outputTokens: usage.outputTokens || Math.ceil(result.length / 2), model: config.model });
     await createUserNotification(Number(session.userId), '真实模拟复盘已生成', `“${String(session.templateName || '真实模拟')}”的 AI 复盘已完成，可进入记录查看。`, 'success');
-  } catch (error) { const message = userFacingAiError(error); const failed = await execute('UPDATE simulation_evaluations SET status = \'failed\', error = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ? AND generation_token = ?', [message.slice(0, 2000), evaluationId, generationToken]).catch(() => undefined); if (failed?.affectedRows) await createUserNotification(Number(session.userId), '真实模拟复盘生成失败', message.slice(0, 300), 'error'); }
+  } catch (error) { const message = userFacingAiError(error); const failed = await execute('UPDATE simulation_evaluations SET status = \'failed\', error = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ? AND generation_token = ? AND status = \'processing\'', [message.slice(0, 2000), evaluationId, generationToken]).catch(() => undefined); if (failed?.affectedRows) await createUserNotification(Number(session.userId), '真实模拟复盘生成失败', message.slice(0, 300), 'error'); }
 }
 
 export async function GET(request: Request) {
@@ -68,6 +68,12 @@ export async function GET(request: Request) {
     const pollOnly = new URL(request.url).searchParams.get('poll') === '1';
     if (!Number.isInteger(sessionId) || sessionId <= 0) return Response.json({ error: '模拟场次编号无效' }, { status: 400 });
     await sessionForUser(current.id, current.role, sessionId);
+    // A background task cannot be trusted to survive an I/O outage or a
+    // deployment. Persist a terminal status instead of leaving users in an
+    // endless “generating” state, while retaining the record for retry/audit.
+    await execute(`UPDATE simulation_evaluations
+      SET status = 'failed', error = '生成超过 10 分钟仍未完成，可能因服务中断或数据库繁忙而终止。请点击“复盘模拟流程 / 更新模拟复盘”重新触发。', completed_at = CURRENT_TIMESTAMP
+      WHERE session_id = ? AND status = 'processing' AND created_at < DATE_SUB(CURRENT_TIMESTAMP, INTERVAL 10 MINUTE)`, [sessionId]);
     const evaluations = await query(pollOnly
       ? 'SELECT id, status, error, created_at < DATE_SUB(CURRENT_TIMESTAMP, INTERVAL 10 MINUTE) AS isStale, DATE_FORMAT(created_at, \'%Y-%m-%dT%H:%i:%s\') AS createdAt, DATE_FORMAT(completed_at, \'%Y-%m-%dT%H:%i:%s\') AS completedAt FROM simulation_evaluations WHERE session_id = ? ORDER BY id DESC'
       : 'SELECT id, status, result, error, created_at < DATE_SUB(CURRENT_TIMESTAMP, INTERVAL 10 MINUTE) AS isStale, DATE_FORMAT(created_at, \'%Y-%m-%dT%H:%i:%s\') AS createdAt, DATE_FORMAT(completed_at, \'%Y-%m-%dT%H:%i:%s\') AS completedAt FROM simulation_evaluations WHERE session_id = ? ORDER BY id DESC', [sessionId]);
