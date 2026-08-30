@@ -1460,7 +1460,12 @@ function Simulation({
       };
       fullRecorder.current = value;
       fullRecordingStartedAt.current = Date.now();
-      value.start(1000);
+      // A timesliced MediaRecorder output is a fragmented WebM. Some browsers
+      // expose only its first fragment as seekable, which made a 15-minute
+      // session look like a 15-second audio file in review. Emit one complete
+      // container when recording stops; fixWebmDuration then writes its full
+      // duration metadata before upload.
+      value.start();
     } catch {
       setMessage(
         "完整录音未开启：请允许浏览器使用麦克风。仍可继续用文字完成模拟。",
