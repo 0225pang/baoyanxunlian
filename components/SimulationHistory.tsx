@@ -32,8 +32,27 @@ export default function SimulationHistory({ onBack, initialRecordId, onInitialRe
   const [evaluations, setEvaluations] = useState<Evaluation[]>([]); const [messages, setMessages] = useState<ChatMessage[]>([]); const [message, setMessage] = useState(''); const [generating, setGenerating] = useState(false); const [chatOpen, setChatOpen] = useState(false); const [chatInput, setChatInput] = useState(''); const [chatLoading, setChatLoading] = useState(false);
   const loadRecords = useCallback(async () => { try { const data = await requestJson('/api/simulation-records'); setRecords((data.records || []).map((record: SimulationRecord) => ({ ...record, username: learnerLabel(record.displayName, record.username) }))); } catch (error) { setMessage((error as Error).message); } }, []);
   const loadReview = useCallback(async (sessionId: number) => { const data = await requestJson('/api/ai/simulation-evaluations?sessionId=' + sessionId); setEvaluations(data.evaluations || []); setMessages((data.messages || []).map((item: ChatMessage) => ({ id: Number(item.id), role: item.role, content: item.content }))); }, []);
+  const pollReview = useCallback(async (sessionId: number) => requestJson('/api/ai/simulation-evaluations?sessionId=' + sessionId + '&poll=1'), []);
   useEffect(() => { void loadRecords(); }, [loadRecords]);
-  useEffect(() => { if (!selected || !evaluations.some((item) => item.status === 'processing')) return; const timer = window.setInterval(() => { void loadReview(selected.id).catch(() => undefined); }, 4000); return () => window.clearInterval(timer); }, [selected, evaluations, loadReview]);
+  useEffect(() => {
+    if (!selected || !evaluations.some((item) => item.status === 'processing')) return;
+    let disposed = false; let inFlight = false;
+    const poll = async () => {
+      if (disposed || inFlight) return;
+      inFlight = true;
+      try {
+        const data = await pollReview(selected.id);
+        if (disposed) return;
+        const next = data.evaluations || [];
+        // Poll responses deliberately omit large review bodies. Keep the
+        // already-rendered bodies until a completed poll triggers full reload.
+        setEvaluations((current) => next.map((item: Evaluation) => ({ ...current.find((saved) => saved.id === item.id), ...item })));
+        if (!next.some((item: Evaluation) => item.status === 'processing')) void loadReview(selected.id);
+      } catch { /* The next scheduled poll can retry. */ } finally { inFlight = false; }
+    };
+    const timer = window.setInterval(() => { void poll(); }, 15000);
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, [selected, evaluations, loadReview, pollReview]);
   async function openRecord(record: SimulationRecord) { setSelected(record); setDetail(null); setEvaluations([]); setMessages([]); setMessage(''); try { const [recordData] = await Promise.all([requestJson('/api/simulation-records/' + record.id), loadReview(record.id)]); setDetail({ ...recordData, session: { ...recordData.session, username: learnerLabel(recordData.session?.displayName, recordData.session?.username) } }); } catch (error) { setMessage((error as Error).message); } }
   useEffect(() => { if (!initialRecordId) return; const record = records.find((item) => item.id === initialRecordId); if (!record) return; onInitialRecordOpened?.(); void openRecord(record); }, [initialRecordId, records]);
   async function generateReview() { if (!selected || generating) return; setGenerating(true); setMessage(''); try { const data = await requestJson('/api/ai/simulation-evaluations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: selected.id }) }); setMessage(data.reused ? '回答没有变化，已保留现有复盘。' : '模拟复盘已提交，正在生成。'); await loadReview(selected.id); } catch (error) { setMessage((error as Error).message); } finally { setGenerating(false); } }

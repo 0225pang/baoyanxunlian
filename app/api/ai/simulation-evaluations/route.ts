@@ -43,9 +43,13 @@ async function runEvaluation(evaluationId: number, session: RowDataPacket, input
 export async function GET(request: Request) {
   try {
     const current = await requireUser(); const sessionId = Number(new URL(request.url).searchParams.get('sessionId'));
+    const pollOnly = new URL(request.url).searchParams.get('poll') === '1';
     if (!Number.isInteger(sessionId) || sessionId <= 0) return Response.json({ error: '模拟场次编号无效' }, { status: 400 });
     await sessionForUser(current.id, current.role, sessionId);
-    const evaluations = await query('SELECT id, status, result, error, DATE_FORMAT(created_at, \'%Y-%m-%dT%H:%i:%s\') AS createdAt, DATE_FORMAT(completed_at, \'%Y-%m-%dT%H:%i:%s\') AS completedAt FROM simulation_evaluations WHERE session_id = ? ORDER BY id DESC', [sessionId]);
+    const evaluations = await query(pollOnly
+      ? 'SELECT id, status, error, DATE_FORMAT(created_at, \'%Y-%m-%dT%H:%i:%s\') AS createdAt, DATE_FORMAT(completed_at, \'%Y-%m-%dT%H:%i:%s\') AS completedAt FROM simulation_evaluations WHERE session_id = ? ORDER BY id DESC'
+      : 'SELECT id, status, result, error, DATE_FORMAT(created_at, \'%Y-%m-%dT%H:%i:%s\') AS createdAt, DATE_FORMAT(completed_at, \'%Y-%m-%dT%H:%i:%s\') AS completedAt FROM simulation_evaluations WHERE session_id = ? ORDER BY id DESC', [sessionId]);
+    if (pollOnly) return Response.json({ evaluations, poll: true });
     const messages = await query('SELECT id, role, content, DATE_FORMAT(created_at, \'%Y-%m-%dT%H:%i:%s\') AS createdAt FROM simulation_messages WHERE session_id = ? AND evaluation_id IS NULL ORDER BY id ASC', [sessionId]);
     return Response.json({ evaluations, messages });
   } catch (error) { if (error instanceof Error && error.message === 'SIMULATION_NOT_COMPLETE') return Response.json({ error: '仅完整完成的模拟可以复盘' }, { status: 400 }); return apiError(error); }
@@ -56,7 +60,16 @@ export async function POST(request: Request) {
     const current = await requireUser(); const body = await request.json() as { sessionId?: number }; const sessionId = Number(body.sessionId);
     if (!Number.isInteger(sessionId) || sessionId <= 0) return Response.json({ error: '模拟场次编号无效' }, { status: 400 });
     const session = await sessionForUser(current.id, current.role, sessionId); const input = await buildInput(session); if (!input.answers.length) return Response.json({ error: '本场模拟没有可评估的回答' }, { status: 400 });
-    const inputHash = hashEvaluationInput(input); const existing = await query<RowDataPacket[]>('SELECT id, status, result, error FROM simulation_evaluations WHERE session_id = ? AND input_hash = ? LIMIT 1', [sessionId, inputHash]);
+    const inputHash = hashEvaluationInput(input); let existing = await query<RowDataPacket[]>('SELECT id, status, result, error FROM simulation_evaluations WHERE session_id = ? AND input_hash = ? LIMIT 1', [sessionId, inputHash]);
+    // Sessions created before the flow snapshot feature have no snapshot. Their
+    // old evaluation hash must remain valid, otherwise a deployment alone would
+    // wrongly trigger a new paid review for unchanged answers.
+    if (!input.simulationConfiguration) {
+      const { simulationConfiguration: _ignored, ...legacyInput } = input;
+      const legacyHash = hashEvaluationInput(legacyInput);
+      const legacy = await query<RowDataPacket[]>('SELECT id, status, result, error FROM simulation_evaluations WHERE session_id = ? AND input_hash = ? LIMIT 1', [sessionId, legacyHash]);
+      if (legacy[0]) existing = legacy;
+    }
     if (existing[0] && ['processing', 'completed'].includes(String(existing[0].status))) return Response.json({ status: existing[0].status, evaluationId: Number(existing[0].id), result: existing[0].result || null, error: existing[0].error || null, reused: true }, { status: existing[0].status === 'processing' ? 202 : 200 });
     const config = await getActiveAiConfig(); if (!config?.apiKey) return Response.json({ error: 'AI 尚未配置 API Key' }, { status: 503 }); await assertApiAccess(Number(session.userId), 'ai');
     const previousRows = await query<RowDataPacket[]>('SELECT result FROM simulation_evaluations WHERE session_id = ? AND status = \'completed\' ORDER BY id DESC LIMIT 1', [sessionId]);
