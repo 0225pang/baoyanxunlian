@@ -108,15 +108,17 @@ export async function POST(request: Request) {
     const input = await buildInput(userId, questionId);
     const inputHash = hashEvaluationInput({ questionId, userId, attempts: input.attempts.map((attempt) => ({ id: attempt.id, answer: attempt.answer, transcript: attempt.transcript, transcriptSegments: attempt.transcriptSegments })) });
     const existing = await query<RowDataPacket[]>('SELECT id, status, result, error FROM ai_evaluations WHERE user_id = ? AND question_id = ? AND input_hash = ? LIMIT 1', [userId, questionId, inputHash]);
-    if (existing[0]) return Response.json({ status: existing[0].status, evaluationId: Number(existing[0].id), result: existing[0].result || null, error: existing[0].error || null, reused: true }, { status: existing[0].status === 'processing' ? 202 : 200 });
+    if (existing[0] && ['processing', 'completed'].includes(String(existing[0].status))) return Response.json({ status: existing[0].status, evaluationId: Number(existing[0].id), result: existing[0].result || null, error: existing[0].error || null, reused: true }, { status: existing[0].status === 'processing' ? 202 : 200 });
     const config = await getActiveAiConfig();
     if (!config?.apiKey) return Response.json({ error: 'AI 尚未配置 API Key，请先到管理后台填写' }, { status: 503 });
     await assertApiAccess(userId, 'ai');
     const previousRows = await query<RowDataPacket[]>('SELECT result FROM ai_evaluations WHERE user_id = ? AND question_id = ? AND status = \'completed\' ORDER BY id DESC LIMIT 1', [userId, questionId]);
     const previousResult = previousRows[0]?.result ? String(previousRows[0].result) : '';
     const prompt = buildUserPrompt(input) + (previousResult ? '\n\n上一轮 AI 评估结果（请结合新回答判断进步或退步）：\n' + previousResult : '');
-    const result = await execute('INSERT INTO ai_evaluations (user_id, question_id, input_hash, input_snapshot, status) VALUES (?, ?, ?, ?, \'processing\')', [userId, questionId, inputHash, JSON.stringify(input)]);
-    const evaluationId = Number(result.insertId);
+    const evaluationId = existing[0]
+      ? Number(existing[0].id)
+      : Number((await execute('INSERT INTO ai_evaluations (user_id, question_id, input_hash, input_snapshot, status) VALUES (?, ?, ?, ?, \'processing\')', [userId, questionId, inputHash, JSON.stringify(input)])).insertId);
+    if (existing[0]) await execute('UPDATE ai_evaluations SET status = \'processing\', result = NULL, error = NULL, input_snapshot = ?, completed_at = NULL WHERE id = ?', [JSON.stringify(input), evaluationId]);
     void runEvaluation(evaluationId, userId, questionId, input, config, prompt);
     return Response.json({ status: 'processing', evaluationId, message: '评估已开始，请稍候查看' }, { status: 202 });
   } catch (error) { return apiError(error); }

@@ -1190,6 +1190,8 @@ function Simulation({
   const fullRecorder = useRef<MediaRecorder | null>(null);
   const fullChunks = useRef<Blob[]>([]);
   const fullAudioRef = useRef<Blob | null>(null);
+  const fullAudioReady = useRef<Promise<Blob | null> | null>(null);
+  const fullRecordingStartedAt = useRef(0);
   const finishedRef = useRef(false);
   // State updates are asynchronous.  This ref prevents a just-cleared follow-up
   // from scheduling another countdown while the final submission is in flight.
@@ -1441,13 +1443,22 @@ function Simulation({
         if (event.data.size) fullChunks.current.push(event.data);
       };
       value.onstop = () => {
-        const blob = new Blob(fullChunks.current, {
+        const rawBlob = new Blob(fullChunks.current, {
           type: value.mimeType || "audio/webm",
         });
-        fullAudioRef.current = blob;
-        setFullAudio(blob);
+        const elapsed = Math.max(0, Date.now() - fullRecordingStartedAt.current);
+        const ready = elapsed > 0
+          ? fixWebmDuration(rawBlob, elapsed, { logger: false }).catch(() => rawBlob)
+          : Promise.resolve(rawBlob);
+        fullAudioReady.current = ready;
+        void ready.then((blob) => {
+          fullAudioRef.current = blob;
+          setFullAudio(blob);
+          return blob;
+        });
       };
       fullRecorder.current = value;
+      fullRecordingStartedAt.current = Date.now();
       value.start(1000);
     } catch {
       setMessage(
@@ -1700,6 +1711,8 @@ function Simulation({
       setSegmentBlob(null);
       setFullAudio(null);
       fullAudioRef.current = null;
+      fullAudioReady.current = null;
+      fullRecordingStartedAt.current = 0;
       finishedRef.current = false;
       submissionRef.current = false;
       moduleTimeoutRef.current = "";
@@ -1860,9 +1873,16 @@ function Simulation({
   }
   async function stopFullRecording() {
     const value = fullRecorder.current;
-    if (!value || value.state !== "recording") return fullAudioRef.current;
+    if (!value || value.state !== "recording")
+      return fullAudioReady.current
+        ? await fullAudioReady.current
+        : fullAudioRef.current;
     return new Promise<Blob | null>((resolve) => {
-      value.addEventListener("stop", () => resolve(fullAudioRef.current), {
+      value.addEventListener("stop", () => {
+        const ready = fullAudioReady.current;
+        if (ready) void ready.then(resolve);
+        else resolve(fullAudioRef.current);
+      }, {
         once: true,
       });
       value.stop();
