@@ -490,6 +490,14 @@ export default function Home() {
     setRecording(false);
   }
 
+  function navigate(nextPage: Page) {
+    // Stop both the ordinary practice reader and the simulation reader before
+    // React switches screens, rather than waiting for component unmount.
+    window.dispatchEvent(new Event("app-navigation"));
+    stopMedia();
+    setPage(nextPage);
+  }
+
   function continueFromRecord(item: RecordItem) {
     if (!item.questionId || !item.typeId) {
       setMessage("原题已不存在，无法继续作答。");
@@ -557,7 +565,7 @@ export default function Home() {
   return (
     <div className="app">
       <header>
-        <button className="logo" onClick={() => setPage("home")}>
+        <button className="logo" onClick={() => navigate("home")}>
           <img
             className="logo-image"
             src="/logo2.0.png?v=1"
@@ -574,32 +582,32 @@ export default function Home() {
         <nav>
           <button
             className={page === "home" || page === "answer" ? "active" : ""}
-            onClick={() => setPage("home")}
+            onClick={() => navigate("home")}
           >
             题库训练
           </button>
           <button
             className={page === "history" ? "active" : ""}
-            onClick={() => setPage("history")}
+            onClick={() => navigate("history")}
           >
             作答记录 <i>{records.length}</i>
           </button>
           <button
             className={page === "simulation-history" ? "active" : ""}
-            onClick={() => setPage("simulation-history")}
+            onClick={() => navigate("simulation-history")}
           >
             真实模拟记录
           </button>
           <button
             className={page === "settings" ? "active" : ""}
-            onClick={() => setPage("settings")}
+            onClick={() => navigate("settings")}
           >
             设置
           </button>
           {user.role === "admin" && (
             <button
               className={page === "management" ? "active" : ""}
-              onClick={() => setPage("management")}
+              onClick={() => navigate("management")}
             >
               管理后台
             </button>
@@ -1276,6 +1284,11 @@ function Simulation({
     },
     [],
   );
+  useEffect(() => {
+    const stopOnNavigation = () => stopQuestionReading();
+    window.addEventListener("app-navigation", stopOnNavigation);
+    return () => window.removeEventListener("app-navigation", stopOnNavigation);
+  }, []);
   const current = steps[stepIndex];
   const totalSeconds =
     templates.find((item) => item.id === Number(templateId))?.totalSeconds || 0;
@@ -4113,17 +4126,8 @@ function Settings({
     centbrowser: "centbrowser://flags/#unsafely-treat-insecure-origin-as-secure",
   } as const;
   const browserOptions: Array<{ key: BrowserKey; label: string; note?: string }> = [
-    { key: "edge", label: "Microsoft Edge（推荐）" },
-    { key: "chrome", label: "Google Chrome（推荐）" },
-    { key: "browser360", label: "360 安全浏览器", note: "仅极速 / Chromium 内核" },
-    { key: "browser360speed", label: "360 极速浏览器 X" },
-    { key: "lenovo", label: "联想浏览器" },
-    { key: "quark", label: "夸克 PC" },
-    { key: "opera", label: "Opera 欧朋" },
-    { key: "qq", label: "QQ 浏览器 PC" },
-    { key: "sogou", label: "搜狗浏览器", note: "仅极速模式" },
-    { key: "brave", label: "Brave" },
-    { key: "centbrowser", label: "百分浏览器" },
+    { key: "edge", label: "Microsoft Edge（手机 / 电脑推荐）" },
+    { key: "chrome", label: "Google Chrome（手机 / 电脑推荐）" },
   ];
 
   useEffect(() => {
@@ -4263,8 +4267,7 @@ function Settings({
           <span className="section-kicker">BROWSER PERMISSION</span>
           <h2>HTTP 环境录音权限</h2>
           <p>
-            当前使用 IP + HTTP
-            时，浏览器默认不会开放麦克风。电脑端建议优先使用最新版 Microsoft Edge 或 Google Chrome；打开配置指引后，可复制当前网址并进入对应浏览器的实验设置。
+            推荐手机和电脑都使用最新版 Microsoft Edge 或 Google Chrome。两者均可直接输入下方完整 flags 地址进行配置。
           </p>
         </div>
         <button
@@ -4302,7 +4305,7 @@ function Settings({
             <span className="section-kicker">MICROPHONE ACCESS</span>
             <h2 id="permission-guide-title">开启 HTTP 录音权限</h2>
             <p className="permission-intro">
-              这是仅用于电脑端 HTTP 调试的临时方案：网页不能直接修改浏览器实验性开关，但可以帮你准备好要加入白名单的地址。
+              推荐手机和电脑均使用 Microsoft Edge 或 Google Chrome；在地址栏输入对应完整 flags 地址后，按下方步骤配置当前网址。
             </p>
             <ol className="permission-steps">
               <li>
@@ -4317,7 +4320,7 @@ function Settings({
                 <div>
                   <strong>打开浏览器实验设置</strong>
                   <small>
-                    在下方选择你正在使用的电脑浏览器，或手动打开对应完整 flags 地址并搜索{" "}
+                    在下方选择 Edge 或 Chrome，或在地址栏输入对应完整 flags 地址并搜索{" "}
                     <code>unsafely-treat-insecure-origin-as-secure</code>。
                   </small>
                 </div>
@@ -4356,9 +4359,9 @@ function Settings({
               ))}
             </div>
             <div className="permission-mobile-note">
-              <strong>手机 / 平板请使用 HTTPS</strong>
+              <strong>推荐 Edge / Chrome（手机和电脑均可配置）</strong>
               <p>
-                Android Chrome、Android Edge、iPhone Safari / Edge 均可在 HTTPS 页面申请麦克风；手机浏览器通常没有这个 flags 开关，HTTP + IP 无法可靠录音。手机上的自动朗读、倒计时和开始录音提示音还会受系统自动播放策略限制，视觉倒计时与录音功能不受影响；需要稳定声音提示时，请先主动点击一次“开始录音”或试听。
+                手机端与电脑端均建议优先使用 Microsoft Edge 或 Google Chrome，并直接输入上方按钮对应的完整 flags 地址。其他浏览器可自行探索配置方式。
               </p>
             </div>
             {browserHint && (
@@ -4374,7 +4377,7 @@ function Settings({
               </div>
             )}
             <p className="permission-warning">
-              提示：360 安全浏览器、搜狗浏览器请切换到极速 / Chromium 内核；兼容模式无效。QQ 浏览器手机版不支持该 flag。正式上线和所有手机访问请使用 HTTPS。
+              其他浏览器的兼容情况请自行探索；日常使用建议统一采用 Microsoft Edge 或 Google Chrome。
             </p>
           </div>
         </div>
