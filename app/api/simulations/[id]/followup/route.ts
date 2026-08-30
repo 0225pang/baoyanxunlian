@@ -1,6 +1,7 @@
 import { apiError, requireUser } from "@/lib/auth";
 import { execute, query } from "@/lib/db";
 import {
+  aiRequestError,
   chatCompletionsUrl,
   extractChatContent,
   getActiveAiConfig,
@@ -88,7 +89,7 @@ export async function POST(
     const raw = await response.text();
     if (!response.ok)
       return Response.json(
-        { error: "追问生成失败：" + raw.slice(0, 400) },
+        { error: aiRequestError(response.status, raw) },
         { status: 502 },
       );
     const payload = safeJsonParse(raw);

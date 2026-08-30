@@ -1,6 +1,6 @@
 import { apiError, requireUser } from '@/lib/auth';
 import { execute, query } from '@/lib/db';
-import { chatCompletionsUrl, extractChatContent, getActiveAiConfig, safeJsonParse, samplingParameters } from '@/lib/ai';
+import { aiRequestError, chatCompletionsUrl, extractChatContent, getActiveAiConfig, safeJsonParse, samplingParameters, userFacingAiError } from '@/lib/ai';
 import { assertApiAccess, logApiUsage, readTokenUsage } from '@/lib/usage';
 import type { RowDataPacket } from 'mysql2/promise';
 
@@ -66,7 +66,7 @@ export async function POST(request: Request) {
     });
     if (!response.ok) {
       const raw = await response.text();
-      return Response.json({ error: 'AI 请求失败 ' + response.status + ': ' + raw.slice(0, 500) }, { status: 502 });
+      return Response.json({ error: aiRequestError(response.status, raw) }, { status: 502 });
     }
 
     const encoder = new TextEncoder();
@@ -106,7 +106,7 @@ export async function POST(request: Request) {
           await logApiUsage(userId, 'ai', { inputTokens: inputTokens || Math.ceil(JSON.stringify(trainingContext).length / 2), outputTokens: outputTokens || Math.ceil(reply.length / 2), model: config.model });
           send({ type: 'done', content: '' });
         } catch (error) {
-          send({ type: 'error', error: error instanceof Error ? error.message : String(error) });
+          send({ type: 'error', error: userFacingAiError(error) });
         } finally {
           controller.close();
         }

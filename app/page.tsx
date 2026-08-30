@@ -4126,8 +4126,17 @@ function Settings({
     centbrowser: "centbrowser://flags/#unsafely-treat-insecure-origin-as-secure",
   } as const;
   const browserOptions: Array<{ key: BrowserKey; label: string; note?: string }> = [
-    { key: "edge", label: "Microsoft Edge（手机 / 电脑推荐）" },
-    { key: "chrome", label: "Google Chrome（手机 / 电脑推荐）" },
+    { key: "edge", label: "Microsoft Edge" },
+    { key: "chrome", label: "Google Chrome" },
+    { key: "browser360", label: "360 安全浏览器", note: "仅极速 / Chromium 内核" },
+    { key: "browser360speed", label: "360 极速浏览器 X" },
+    { key: "lenovo", label: "联想浏览器" },
+    { key: "quark", label: "夸克 PC" },
+    { key: "opera", label: "Opera 欧朋" },
+    { key: "qq", label: "QQ 浏览器 PC" },
+    { key: "sogou", label: "搜狗浏览器", note: "仅极速模式" },
+    { key: "brave", label: "Brave" },
+    { key: "centbrowser", label: "百分浏览器" },
   ];
 
   useEffect(() => {
@@ -4267,7 +4276,7 @@ function Settings({
           <span className="section-kicker">BROWSER PERMISSION</span>
           <h2>HTTP 环境录音权限</h2>
           <p>
-            推荐手机和电脑都使用最新版 Microsoft Edge 或 Google Chrome。两者均可直接输入下方完整 flags 地址进行配置。
+            当前使用 IP + HTTP 时，浏览器默认不会开放麦克风。打开配置指引后，可复制当前网址并进入对应浏览器的实验设置。
           </p>
         </div>
         <button
@@ -4305,7 +4314,7 @@ function Settings({
             <span className="section-kicker">MICROPHONE ACCESS</span>
             <h2 id="permission-guide-title">开启 HTTP 录音权限</h2>
             <p className="permission-intro">
-              推荐手机和电脑均使用 Microsoft Edge 或 Google Chrome；在地址栏输入对应完整 flags 地址后，按下方步骤配置当前网址。
+              这是仅用于电脑端 HTTP 调试的临时方案：网页不能直接修改浏览器实验性开关，但可以帮你准备好要加入白名单的地址。
             </p>
             <ol className="permission-steps">
               <li>
@@ -4320,7 +4329,7 @@ function Settings({
                 <div>
                   <strong>打开浏览器实验设置</strong>
                   <small>
-                    在下方选择 Edge 或 Chrome，或在地址栏输入对应完整 flags 地址并搜索{" "}
+                    在下方选择正在使用的浏览器，或在地址栏输入对应完整 flags 地址并搜索{" "}
                     <code>unsafely-treat-insecure-origin-as-secure</code>。
                   </small>
                 </div>
@@ -4359,9 +4368,9 @@ function Settings({
               ))}
             </div>
             <div className="permission-mobile-note">
-              <strong>推荐 Edge / Chrome（手机和电脑均可配置）</strong>
+              <strong>手机 / 平板请使用 HTTPS</strong>
               <p>
-                手机端与电脑端均建议优先使用 Microsoft Edge 或 Google Chrome，并直接输入上方按钮对应的完整 flags 地址。其他浏览器可自行探索配置方式。
+                手机浏览器通常没有这个 flags 开关，HTTP + IP 无法可靠申请麦克风；请使用 HTTPS。自动朗读、倒计时和开始录音提示音还会受系统自动播放策略限制，视觉倒计时与录音功能不受影响。
               </p>
             </div>
             {browserHint && (
@@ -4377,7 +4386,7 @@ function Settings({
               </div>
             )}
             <p className="permission-warning">
-              其他浏览器的兼容情况请自行探索；日常使用建议统一采用 Microsoft Edge 或 Google Chrome。
+              提示：360 安全浏览器、搜狗浏览器请切换到极速 / Chromium 内核；兼容模式无效。QQ 浏览器手机版不支持该 flag。正式上线和所有手机访问请使用 HTTPS。
             </p>
           </div>
         </div>

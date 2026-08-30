@@ -1,6 +1,6 @@
 import { apiError, requireUser } from '@/lib/auth';
 import { query } from '@/lib/db';
-import { chatCompletionsUrl, extractChatContent, getActiveAiConfig, safeJsonParse, samplingParameters } from '@/lib/ai';
+import { aiRequestError, chatCompletionsUrl, extractChatContent, getActiveAiConfig, safeJsonParse, samplingParameters } from '@/lib/ai';
 import { assertApiAccess, logApiUsage, readTokenUsage } from '@/lib/usage';
 import { synthesizeConfiguredQuestionVoice } from '@/lib/question-voices';
 import type { RowDataPacket } from 'mysql2/promise';
@@ -53,7 +53,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       }),
     });
     const raw = await response.text();
-    if (!response.ok) return Response.json({ error: '自由交流问题生成失败：' + raw.slice(0, 400) }, { status: 502 });
+    if (!response.ok) return Response.json({ error: aiRequestError(response.status, raw) }, { status: 502 });
     const payload = safeJsonParse(raw); const question = extractChatContent(payload);
     if (!question) return Response.json({ error: '未生成有效问题' }, { status: 502 });
     const usage = readTokenUsage(payload);

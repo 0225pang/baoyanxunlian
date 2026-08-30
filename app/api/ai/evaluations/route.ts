@@ -1,6 +1,6 @@
 import { apiError, requireUser } from '@/lib/auth';
 import { execute, query } from '@/lib/db';
-import { chatCompletionsUrl, extractChatContent, getActiveAiConfig, hashEvaluationInput, safeJsonParse, samplingParameters, type ActiveAiConfig } from '@/lib/ai';
+import { aiRequestError, chatCompletionsUrl, extractChatContent, getActiveAiConfig, hashEvaluationInput, safeJsonParse, samplingParameters, userFacingAiError, type ActiveAiConfig } from '@/lib/ai';
 import { assertApiAccess, logApiUsage, readTokenUsage } from '@/lib/usage';
 import { createUserNotification } from '@/lib/notifications';
 import type { RowDataPacket } from 'mysql2/promise';
@@ -35,7 +35,7 @@ async function runEvaluation(evaluationId: number, userId: number, questionId: n
     });
     const raw = await response.text();
     const payload = safeJsonParse(raw);
-    if (!response.ok) throw new Error('AI 请求失败 ' + response.status + ': ' + raw.slice(0, 500));
+    if (!response.ok) throw new Error(aiRequestError(response.status, raw));
     const result = extractChatContent(payload);
     if (!result) throw new Error('AI 返回内容为空');
     await execute('UPDATE ai_evaluations SET status = \'completed\', result = ?, error = NULL, completed_at = CURRENT_TIMESTAMP WHERE id = ?', [result, evaluationId]);
@@ -44,7 +44,7 @@ async function runEvaluation(evaluationId: number, userId: number, questionId: n
     await logApiUsage(userId, 'ai', { inputTokens: usage.inputTokens || Math.ceil(prompt.length / 2), outputTokens: usage.outputTokens || Math.ceil(result.length / 2), model: config.model });
     await createUserNotification(userId, 'AI 复盘已生成', '本题的 AI 复盘已完成，可前往复盘页面查看并继续追问。', 'success');
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = userFacingAiError(error);
     await execute('UPDATE ai_evaluations SET status = \'failed\', error = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?', [message.slice(0, 2000), evaluationId]).catch(() => undefined);
     await createUserNotification(userId, 'AI 复盘生成失败', `本题复盘未完成：${message.slice(0, 300)}`, 'error');
   }

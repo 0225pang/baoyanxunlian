@@ -1,5 +1,5 @@
 import { apiError, requireUser } from '@/lib/auth';
-import { chatCompletionsUrl, extractChatContent, getActiveAiConfig, hashEvaluationInput, safeJsonParse, samplingParameters } from '@/lib/ai';
+import { aiRequestError, chatCompletionsUrl, extractChatContent, getActiveAiConfig, hashEvaluationInput, safeJsonParse, samplingParameters, userFacingAiError } from '@/lib/ai';
 import { execute, query } from '@/lib/db';
 import { assertApiAccess, logApiUsage, readTokenUsage } from '@/lib/usage';
 import { createUserNotification } from '@/lib/notifications';
@@ -30,13 +30,13 @@ async function runEvaluation(evaluationId: number, session: RowDataPacket, input
   try {
     await execute('INSERT INTO simulation_messages (session_id, user_id, evaluation_id, role, content) VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)', [Number(session.id), Number(session.userId), evaluationId, 'system', systemPrompt, Number(session.id), Number(session.userId), evaluationId, 'user', prompt]);
     const response = await fetch(chatCompletionsUrl(config.baseUrl), { method: 'POST', headers: { Authorization: 'Bearer ' + config.apiKey, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: config.model, ...samplingParameters(config.model, 0.3), messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }] }) });
-    const raw = await response.text(); const payload = safeJsonParse(raw); if (!response.ok) throw new Error('AI 请求失败 ' + response.status + ': ' + raw.slice(0, 500));
+    const raw = await response.text(); const payload = safeJsonParse(raw); if (!response.ok) throw new Error(aiRequestError(response.status, raw));
     const result = extractChatContent(payload); if (!result) throw new Error('AI 返回内容为空');
     await execute('UPDATE simulation_evaluations SET status = \'completed\', result = ?, error = NULL, completed_at = CURRENT_TIMESTAMP WHERE id = ?', [result, evaluationId]);
     await execute('INSERT INTO simulation_messages (session_id, user_id, evaluation_id, role, content) VALUES (?, ?, ?, ?, ?)', [Number(session.id), Number(session.userId), evaluationId, 'assistant', result]);
     const usage = readTokenUsage(payload); await logApiUsage(Number(session.userId), 'ai', { inputTokens: usage.inputTokens || Math.ceil(prompt.length / 2), outputTokens: usage.outputTokens || Math.ceil(result.length / 2), model: config.model });
     await createUserNotification(Number(session.userId), '真实模拟复盘已生成', `“${String(session.templateName || '真实模拟')}”的 AI 复盘已完成，可进入记录查看。`, 'success');
-  } catch (error) { const message = String(error); await execute('UPDATE simulation_evaluations SET status = \'failed\', error = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?', [message.slice(0, 2000), evaluationId]).catch(() => undefined); await createUserNotification(Number(session.userId), '真实模拟复盘生成失败', message.slice(0, 300), 'error'); }
+  } catch (error) { const message = userFacingAiError(error); await execute('UPDATE simulation_evaluations SET status = \'failed\', error = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?', [message.slice(0, 2000), evaluationId]).catch(() => undefined); await createUserNotification(Number(session.userId), '真实模拟复盘生成失败', message.slice(0, 300), 'error'); }
 }
 
 export async function GET(request: Request) {

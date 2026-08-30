@@ -1,5 +1,5 @@
 import { apiError, requireUser } from '@/lib/auth';
-import { chatCompletionsUrl, extractChatContent, getActiveAiConfig, safeJsonParse, samplingParameters } from '@/lib/ai';
+import { aiRequestError, chatCompletionsUrl, extractChatContent, getActiveAiConfig, safeJsonParse, samplingParameters, userFacingAiError } from '@/lib/ai';
 import { execute, query } from '@/lib/db';
 import { assertApiAccess, logApiUsage, readTokenUsage } from '@/lib/usage';
 import type { RowDataPacket } from 'mysql2/promise';
@@ -45,7 +45,7 @@ export async function POST(request: Request) {
       { role: 'system', content: '你是小鱼，一名友好、专业的食品专业保研面试讨论伙伴。请直接回答学员当前的问题，进行自然的追问、解释或表达打磨。不要每次都输出完整评估模板，除非学员明确要求。不要虚构训练记录中没有的事实。' },
       { role: 'system', content: '以下是本次及最近一次同学校流程的模拟题目、回答和转写，仅作为讨论上下文：\n' + JSON.stringify(context) }, ...history, { role: 'user', content: message },
     ] }) });
-    if (!response.ok) { const raw = await response.text(); return Response.json({ error: 'AI 请求失败 ' + response.status + ': ' + raw.slice(0, 500) }, { status: 502 }); }
+    if (!response.ok) { const raw = await response.text(); return Response.json({ error: aiRequestError(response.status, raw) }, { status: 502 }); }
     const encoder = new TextEncoder();
     const stream = new ReadableStream({ async start(controller) {
       const send = (payload: Record<string, string>) => controller.enqueue(encoder.encode('data: ' + JSON.stringify(payload) + '\n\n'));
@@ -54,7 +54,7 @@ export async function POST(request: Request) {
         while (true) { const { value, done } = await reader.read(); if (done) break; const text = decoder.decode(value, { stream: true }); source += text; buffer += text; const lines = buffer.split(/\r?\n/); buffer = lines.pop() || ''; lines.forEach(consume); }
         if (buffer) consume(buffer); if (!reply) { const fallback = extractChatContent(safeJsonParse(raw || source)); if (fallback) { reply = fallback; send({ type: 'delta', content: fallback }); } }
         if (!reply) throw new Error('AI 返回内容为空'); await execute('INSERT INTO simulation_messages (session_id, user_id, role, content) VALUES (?, ?, ?, ?)', [sessionId, Number(session.userId), 'assistant', reply]); await logApiUsage(Number(session.userId), 'ai', { inputTokens: inputTokens || Math.ceil(JSON.stringify(context).length / 2), outputTokens: outputTokens || Math.ceil(reply.length / 2), model: config.model }); send({ type: 'done', content: '' });
-      } catch (error) { send({ type: 'error', error: error instanceof Error ? error.message : String(error) }); } finally { controller.close(); }
+      } catch (error) { send({ type: 'error', error: userFacingAiError(error) }); } finally { controller.close(); }
     } });
     return new Response(stream, { headers: { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive' } });
   } catch (error) { return apiError(error); }

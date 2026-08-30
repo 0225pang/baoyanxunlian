@@ -1,4 +1,5 @@
 import { execute, query } from './db';
+import { AI_ACCESS_DISABLED_MESSAGE, AI_QUOTA_EXHAUSTED_MESSAGE } from './ai';
 import type { RowDataPacket } from 'mysql2/promise';
 
 export type ApiFeature = 'ai' | 'asr' | 'realtime_asr';
@@ -19,6 +20,11 @@ const featureLabel: Record<ApiFeature, string> = {
 };
 
 function limitMessage(feature: ApiFeature, reason: 'disabled' | 'quota') {
+  if (feature === 'ai') {
+    return reason === 'disabled'
+      ? `API_DISABLED:${AI_ACCESS_DISABLED_MESSAGE}`
+      : `API_LIMIT:${AI_QUOTA_EXHAUSTED_MESSAGE}`;
+  }
   return reason === 'disabled'
     ? `API_DISABLED:${featureLabel[feature]}已被管理员关闭`
     : `API_LIMIT:${featureLabel[feature]}本月额度已用完`;

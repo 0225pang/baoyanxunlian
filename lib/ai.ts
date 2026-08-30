@@ -12,6 +12,30 @@ export type AiConfig = {
 
 export type ActiveAiConfig = AiConfig & { configId: number; promptId: number; autoTranscribe: boolean };
 
+export const AI_QUOTA_EXHAUSTED_MESSAGE = '您的模型额度不足，请联系管理员充值。';
+export const AI_ACCESS_DISABLED_MESSAGE = '您暂未开通 AI 对话权限，请联系管理员。';
+
+// Upstream providers use different error shapes for an exhausted balance or a
+// free-tier-only account.  Never expose their raw payload to students.
+export function userFacingAiError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || '');
+  if (
+    /AllocationQuota\.FreeTierOnly|quota|insufficient[_\s-]?(?:balance|credit|fund)|balance.*(?:insufficient|not enough)|额度(?:不足|用尽|已用完)|余额不足|免费额度.*(?:用尽|耗尽)|no\s+(?:remaining\s+)?(?:credit|quota)/i.test(
+      message,
+    )
+  ) {
+    return AI_QUOTA_EXHAUSTED_MESSAGE;
+  }
+  return message;
+}
+
+export function aiRequestError(status: number, raw: string) {
+  const readable = userFacingAiError(raw);
+  return readable === raw
+    ? `AI 请求失败 ${status}：${raw.slice(0, 500)}`
+    : readable;
+}
+
 export async function getActiveAiConfig(): Promise<ActiveAiConfig | null> {
   const rows = await query<RowDataPacket[]>(`SELECT
       COALESCE(c.id, s.active_config_id) AS configId,
