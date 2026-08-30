@@ -5,10 +5,10 @@ import { assertApiAccess, logApiUsage, readTokenUsage } from '@/lib/usage';
 import { createUserNotification } from '@/lib/notifications';
 import type { RowDataPacket } from 'mysql2/promise';
 
-type Input = { sessionId: number; templateName: string; elapsedSeconds: number; simulationConfiguration: unknown | null; answers: unknown[] };
+type Input = { sessionId: number; templateName: string; elapsedSeconds: number; simulationConfiguration: unknown | null; configurationSource: 'session_snapshot' | 'current_template_fallback' | 'unavailable'; answers: unknown[] };
 
 async function sessionForUser(currentId: number, role: string, sessionId: number) {
-  const rows = await query<RowDataPacket[]>('SELECT id, user_id AS userId, template_name AS templateName, template_config_snapshot AS templateConfigSnapshot, elapsed_seconds AS elapsedSeconds, status FROM simulation_sessions WHERE id = ? LIMIT 1', [sessionId]);
+  const rows = await query<RowDataPacket[]>('SELECT id, user_id AS userId, template_id AS templateId, template_name AS templateName, template_config_snapshot AS templateConfigSnapshot, elapsed_seconds AS elapsedSeconds, status FROM simulation_sessions WHERE id = ? LIMIT 1', [sessionId]);
   const session = rows[0];
   if (!session || (role !== 'admin' && Number(session.userId) !== currentId)) throw new Error('FORBIDDEN');
   if (String(session.status) !== 'completed') throw new Error('SIMULATION_NOT_COMPLETE');
@@ -19,8 +19,27 @@ async function buildInput(session: RowDataPacket): Promise<Input> {
   const answers = await query<RowDataPacket[]>(`SELECT module_index AS moduleIndex, module_title AS moduleTitle, question, answer, transcript,
     transcript_segments AS transcriptSegments, followup_question AS followupQuestion, elapsed_seconds AS elapsedSeconds
     FROM simulation_answers WHERE session_id = ? ORDER BY module_index ASC, id ASC`, [Number(session.id)]);
-  const snapshot = session.templateConfigSnapshot ? (typeof session.templateConfigSnapshot === 'string' ? safeJsonParse(String(session.templateConfigSnapshot)) : session.templateConfigSnapshot) : null;
-  return { sessionId: Number(session.id), templateName: String(session.templateName || ''), elapsedSeconds: Number(session.elapsedSeconds || 0), simulationConfiguration: snapshot, answers: answers.map((answer) => ({
+  let snapshot = session.templateConfigSnapshot ? (typeof session.templateConfigSnapshot === 'string' ? safeJsonParse(String(session.templateConfigSnapshot)) : session.templateConfigSnapshot) : null;
+  let configurationSource: Input['configurationSource'] = snapshot ? 'session_snapshot' : 'unavailable';
+  // Before session snapshots were introduced, recover the matching template so
+  // old reviews still receive module durations and follow-up rules.
+  if (!snapshot && Number(session.templateId) > 0) {
+    const templates = await query<RowDataPacket[]>('SELECT name, description, modules, total_seconds AS totalSeconds, module_timeout_mode AS moduleTimeoutMode, dynamic_tts_config AS dynamicTtsConfig, followup_prompt AS followupPrompt FROM simulation_templates WHERE id = ? LIMIT 1', [Number(session.templateId)]);
+    const template = templates[0];
+    if (template) {
+      snapshot = {
+        name: String(template.name || session.templateName || ''),
+        description: template.description ? String(template.description) : null,
+        modules: typeof template.modules === 'string' ? safeJsonParse(String(template.modules)) : template.modules,
+        totalSeconds: Number(template.totalSeconds || 0),
+        moduleTimeoutMode: String(template.moduleTimeoutMode || 'warn'),
+        dynamicTtsConfig: template.dynamicTtsConfig ? (typeof template.dynamicTtsConfig === 'string' ? safeJsonParse(String(template.dynamicTtsConfig)) : template.dynamicTtsConfig) : null,
+        followupPrompt: template.followupPrompt ? String(template.followupPrompt) : null,
+      };
+      configurationSource = 'current_template_fallback';
+    }
+  }
+  return { sessionId: Number(session.id), templateName: String(session.templateName || ''), elapsedSeconds: Number(session.elapsedSeconds || 0), simulationConfiguration: snapshot, configurationSource, answers: answers.map((answer) => ({
     moduleIndex: Number(answer.moduleIndex), moduleTitle: String(answer.moduleTitle || ''), question: String(answer.question || ''), answer: String(answer.answer || ''), transcript: answer.transcript ? String(answer.transcript) : null,
     transcriptSegments: answer.transcriptSegments ? (typeof answer.transcriptSegments === 'string' ? safeJsonParse(String(answer.transcriptSegments)) : answer.transcriptSegments) : null,
     followupQuestion: answer.followupQuestion ? String(answer.followupQuestion) : null, elapsedSeconds: Number(answer.elapsedSeconds || 0),
@@ -65,7 +84,7 @@ export async function POST(request: Request) {
     // old evaluation hash must remain valid, otherwise a deployment alone would
     // wrongly trigger a new paid review for unchanged answers.
     if (!input.simulationConfiguration) {
-      const { simulationConfiguration: _ignored, ...legacyInput } = input;
+      const { simulationConfiguration: _ignored, configurationSource: _sourceIgnored, ...legacyInput } = input;
       const legacyHash = hashEvaluationInput(legacyInput);
       const legacy = await query<RowDataPacket[]>('SELECT id, status, result, error FROM simulation_evaluations WHERE session_id = ? AND input_hash = ? LIMIT 1', [sessionId, legacyHash]);
       if (legacy[0]) existing = legacy;
@@ -73,8 +92,8 @@ export async function POST(request: Request) {
     if (existing[0] && ['processing', 'completed'].includes(String(existing[0].status))) return Response.json({ status: existing[0].status, evaluationId: Number(existing[0].id), result: existing[0].result || null, error: existing[0].error || null, reused: true }, { status: existing[0].status === 'processing' ? 202 : 200 });
     const config = await getActiveAiConfig(); if (!config?.apiKey) return Response.json({ error: 'AI 尚未配置 API Key' }, { status: 503 }); await assertApiAccess(Number(session.userId), 'ai');
     const previousRows = await query<RowDataPacket[]>('SELECT result FROM simulation_evaluations WHERE session_id = ? AND status = \'completed\' ORDER BY id DESC LIMIT 1', [sessionId]);
-    const previous = previousRows[0]?.result ? '\n\n上一次本场模拟的评估如下，请结合当前数据指出进步或仍需改进之处：\n' + String(previousRows[0].result) : '';
-    const prompt = '请使用既定的食品专业保研面试评估标准，复盘以下完整真实模拟。请重点评价总体结构、专业准确性、表达节奏、每个模块表现、追问应对以及下一步训练建议。若提供了带时间戳的转写切片，请分析思考时长与停顿。请用清晰的 Markdown 输出。\n\n' + JSON.stringify(input, null, 2) + previous;
+    const previous = previousRows[0]?.result ? '\n\n上一次本场模拟的评估如下，仅用于比较进步；其中任何时长、流程或要求若与本次 simulationConfiguration 冲突，必须以 simulationConfiguration 为准，不得照抄：\n' + String(previousRows[0].result) : '';
+    const prompt = '请使用既定的食品专业保研面试评估标准，复盘以下完整真实模拟。请重点评价总体结构、专业准确性、表达节奏、每个模块表现、追问应对以及下一步训练建议。若提供了带时间戳的转写切片，请分析思考时长与停顿。重要：simulationConfiguration 中每个模块的 timeSeconds、追问设置和超时策略是本场流程的唯一权威；不得凭经验虚构或改写建议时长。配置缺失时不要输出具体时长要求。请用清晰的 Markdown 输出。\n\n' + JSON.stringify(input, null, 2) + previous;
     const evaluationId = existing[0]
       ? Number(existing[0].id)
       : Number((await execute('INSERT INTO simulation_evaluations (session_id, user_id, input_hash, input_snapshot, status) VALUES (?, ?, ?, ?, \'processing\')', [sessionId, Number(session.userId), inputHash, JSON.stringify(input)])).insertId);
