@@ -35,6 +35,7 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+      - caddy_access_logs:/var/log/caddy
 
   # Keep the legacy HTTP IP entry isolated from ACME validation on ports 80/443.
   caddy-ip:
@@ -47,8 +48,10 @@ services:
       - "18080:80"
     volumes:
       - ./Caddyfile.ip:/etc/caddy/Caddyfile:ro
+      - caddy_access_logs:/var/log/caddy
 
 volumes:
   caddy_data:
   caddy_config:
+  caddy_access_logs:
   question_voice_data:

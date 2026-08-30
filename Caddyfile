@@ -11,6 +11,16 @@
 # Caddy automatically obtains and renews a trusted Let's Encrypt certificate
 # for SITE_DOMAIN. Change SITE_DOMAIN in .env if another subdomain is desired.
 {$SITE_DOMAIN:baoyan.xiaodaidai.tech} {
+  # Persistent structured access audit. It records route, status, duration,
+  # response size and client address, but never request/response bodies.
+  log {
+    output file /var/log/caddy/https-access.json {
+      roll_size 50MiB
+      roll_keep 1000
+      roll_keep_for 876000h
+    }
+    format json
+  }
   # Some networks reset the special TLS-ALPN validation handshake. Use the
   # standard HTTP-01 challenge through public TCP port 80 instead.
   tls {

@@ -1,4 +1,13 @@
 :80 {
+  # Keep legacy IP/HTTP traffic in its own persistent audit file.
+  log {
+    output file /var/log/caddy/http-ip-access.json {
+      roll_size 50MiB
+      roll_keep 1000
+      roll_keep_for 876000h
+    }
+    format json
+  }
   encode zstd gzip
   @realtime path /ws/realtime-asr
   reverse_proxy @realtime realtime-asr:3001
