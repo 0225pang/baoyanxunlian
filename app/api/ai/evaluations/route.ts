@@ -1,6 +1,6 @@
 import { apiError, requireUser } from '@/lib/auth';
 import { execute, query } from '@/lib/db';
-import { chatCompletionsUrl, extractChatContent, getActiveAiConfig, hashEvaluationInput, safeJsonParse, type ActiveAiConfig } from '@/lib/ai';
+import { chatCompletionsUrl, extractChatContent, getActiveAiConfig, hashEvaluationInput, safeJsonParse, samplingParameters, type ActiveAiConfig } from '@/lib/ai';
 import { assertApiAccess, logApiUsage, readTokenUsage } from '@/lib/usage';
 import { createUserNotification } from '@/lib/notifications';
 import type { RowDataPacket } from 'mysql2/promise';
@@ -31,7 +31,7 @@ async function runEvaluation(evaluationId: number, userId: number, questionId: n
     const response = await fetch(chatCompletionsUrl(config.baseUrl), {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + config.apiKey, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: config.model, temperature: 0.3, messages: [{ role: 'system', content: config.systemPrompt }, { role: 'user', content: prompt }] }),
+      body: JSON.stringify({ model: config.model, ...samplingParameters(config.model, 0.3), messages: [{ role: 'system', content: config.systemPrompt }, { role: 'user', content: prompt }] }),
     });
     const raw = await response.text();
     const payload = safeJsonParse(raw);

@@ -1,6 +1,6 @@
 import { apiError, requireUser } from '@/lib/auth';
 import { execute, query } from '@/lib/db';
-import { chatCompletionsUrl, extractChatContent, getActiveAiConfig, safeJsonParse } from '@/lib/ai';
+import { chatCompletionsUrl, extractChatContent, getActiveAiConfig, safeJsonParse, samplingParameters } from '@/lib/ai';
 import { assertApiAccess, logApiUsage, readTokenUsage } from '@/lib/usage';
 import type { RowDataPacket } from 'mysql2/promise';
 
@@ -58,7 +58,7 @@ export async function POST(request: Request) {
     const response = await fetch(chatCompletionsUrl(config.baseUrl), {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + config.apiKey, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-      body: JSON.stringify({ model: config.model, temperature: 0.35, messages: [
+      body: JSON.stringify({ model: config.model, ...samplingParameters(config.model, 0.35), messages: [
         { role: 'system', content: config.systemPrompt },
         { role: 'system', content: '以下是本轮对话的训练背景，请据此回答，但不要复述整段背景：\n' + JSON.stringify(trainingContext) },
         ...history, { role: 'user', content: message },

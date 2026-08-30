@@ -1,6 +1,6 @@
 import { apiError, requireUser } from '@/lib/auth';
 import { query } from '@/lib/db';
-import { chatCompletionsUrl, extractChatContent, getActiveAiConfig, safeJsonParse } from '@/lib/ai';
+import { chatCompletionsUrl, extractChatContent, getActiveAiConfig, safeJsonParse, samplingParameters } from '@/lib/ai';
 import { assertApiAccess, logApiUsage, readTokenUsage } from '@/lib/usage';
 import { synthesizeConfiguredQuestionVoice } from '@/lib/question-voices';
 import type { RowDataPacket } from 'mysql2/promise';
@@ -45,7 +45,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       headers: { Authorization: 'Bearer ' + config.apiKey, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: config.model,
-        temperature: 0.5,
+        ...samplingParameters(config.model, 0.5),
         messages: [
           { role: 'system', content: prompt },
           { role: 'user', content: `当前模块：${String(module.title || '自由交流')}\n\n以下是本场面试已完成环节，请据此生成下一道自由交流问题：\n${contextText}` },

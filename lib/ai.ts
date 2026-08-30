@@ -49,6 +49,11 @@ export function chatCompletionsUrl(baseUrl: string) {
   return normalized.endsWith('/chat/completions') ? normalized : normalized + '/chat/completions';
 }
 
+/** Kimi K3 rejects temperature entirely; compatible models keep the existing defaults. */
+export function samplingParameters(model: string, temperature: number) {
+  return /^kimi-k3(?:$|[-_:])/i.test(model.trim()) ? {} : { temperature };
+}
+
 export function extractChatContent(payload: unknown) {
   if (!payload || typeof payload !== 'object') return '';
   const choices = (payload as { choices?: unknown }).choices;

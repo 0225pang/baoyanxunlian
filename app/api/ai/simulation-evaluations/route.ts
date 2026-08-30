@@ -1,5 +1,5 @@
 import { apiError, requireUser } from '@/lib/auth';
-import { chatCompletionsUrl, extractChatContent, getActiveAiConfig, hashEvaluationInput, safeJsonParse } from '@/lib/ai';
+import { chatCompletionsUrl, extractChatContent, getActiveAiConfig, hashEvaluationInput, safeJsonParse, samplingParameters } from '@/lib/ai';
 import { execute, query } from '@/lib/db';
 import { assertApiAccess, logApiUsage, readTokenUsage } from '@/lib/usage';
 import { createUserNotification } from '@/lib/notifications';
@@ -29,7 +29,7 @@ async function buildInput(session: RowDataPacket): Promise<Input> {
 async function runEvaluation(evaluationId: number, session: RowDataPacket, input: Input, systemPrompt: string, config: NonNullable<Awaited<ReturnType<typeof getActiveAiConfig>>>, prompt: string) {
   try {
     await execute('INSERT INTO simulation_messages (session_id, user_id, evaluation_id, role, content) VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)', [Number(session.id), Number(session.userId), evaluationId, 'system', systemPrompt, Number(session.id), Number(session.userId), evaluationId, 'user', prompt]);
-    const response = await fetch(chatCompletionsUrl(config.baseUrl), { method: 'POST', headers: { Authorization: 'Bearer ' + config.apiKey, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: config.model, temperature: 0.3, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }] }) });
+    const response = await fetch(chatCompletionsUrl(config.baseUrl), { method: 'POST', headers: { Authorization: 'Bearer ' + config.apiKey, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: config.model, ...samplingParameters(config.model, 0.3), messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }] }) });
     const raw = await response.text(); const payload = safeJsonParse(raw); if (!response.ok) throw new Error('AI 请求失败 ' + response.status + ': ' + raw.slice(0, 500));
     const result = extractChatContent(payload); if (!result) throw new Error('AI 返回内容为空');
     await execute('UPDATE simulation_evaluations SET status = \'completed\', result = ?, error = NULL, completed_at = CURRENT_TIMESTAMP WHERE id = ?', [result, evaluationId]);

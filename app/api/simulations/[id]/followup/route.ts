@@ -5,6 +5,7 @@ import {
   extractChatContent,
   getActiveAiConfig,
   safeJsonParse,
+  samplingParameters,
 } from "@/lib/ai";
 import { assertApiAccess, logApiUsage, readTokenUsage } from "@/lib/usage";
 import { synthesizeConfiguredQuestionVoice } from "@/lib/question-voices";
@@ -69,7 +70,7 @@ export async function POST(
       },
       body: JSON.stringify({
         model: config.model,
-        temperature: 0.45,
+        ...samplingParameters(config.model, 0.45),
         messages: [
           { role: "system", content: prompt },
           {
