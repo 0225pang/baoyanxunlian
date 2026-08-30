@@ -343,18 +343,48 @@ const schema = [
 
 async function hasColumn(db: Pool, table: string, column: string) {
   const [rows] = await db.query<RowDataPacket[]>(
-    'SELECT COUNT(*) AS count FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?',
+    'SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ? LIMIT 1',
     [table, column],
   );
-  return Number(rows[0].count) > 0;
+  return rows.length > 0;
 }
 
 async function hasIndex(db: Pool, table: string, index: string) {
   const [rows] = await db.query<RowDataPacket[]>(
-    'SELECT COUNT(*) AS count FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?',
+    'SELECT 1 FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ? LIMIT 1',
     [table, index],
   );
-  return Number(rows[0].count) > 0;
+  return rows.length > 0;
+}
+
+async function columnInfo(db: Pool, table: string, column: string) {
+  const [rows] = await db.query<RowDataPacket[]>(
+    `SELECT column_type AS columnType, is_nullable AS isNullable, column_default AS columnDefault
+       FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ? LIMIT 1`,
+    [table, column],
+  );
+  return rows[0] as
+    | { columnType: string; isNullable: 'YES' | 'NO'; columnDefault: string | null }
+    | undefined;
+}
+
+async function hasAnyRow(db: Pool, table: string) {
+  const [rows] = await db.query<RowDataPacket[]>(`SELECT 1 FROM ${table} LIMIT 1`);
+  return rows.length > 0;
+}
+
+// Data migrations must never become startup work.  A deployment may restart
+// the app several times; this marker ensures a potentially table-wide update
+// is attempted once only, instead of being repeated on every boot.
+async function runOnceMigration(db: Pool, name: string, work: () => Promise<void>) {
+  const [existing] = await db.query<RowDataPacket[]>(
+    'SELECT 1 FROM app_migrations WHERE name = ? LIMIT 1',
+    [name],
+  );
+  if (existing.length) return;
+  await work();
+  await db.query('INSERT IGNORE INTO app_migrations (name) VALUES (?)', [name]);
 }
 
 async function ensureQuestionColumns(db: Pool) {
@@ -377,15 +407,16 @@ async function ensureQuestionColumns(db: Pool) {
 }
 
 async function migrateLegacyQuestions(db: Pool) {
-  if (await hasColumn(db, 'questions', 'category')) {
+  const hasLegacyCategory = await hasColumn(db, 'questions', 'category');
+  if (hasLegacyCategory) {
     await db.query(`UPDATE questions q JOIN question_types t ON t.code = CASE
       WHEN q.category IN ('专业素养', '专业问题') THEN 'professional'
       WHEN q.category IN ('英语能力', '英语问答问题') THEN 'english'
       WHEN q.category = '综合面试' THEN 'comprehensive'
       ELSE 'professional' END
       SET q.type_id = t.id WHERE q.type_id IS NULL`);
+    await db.query("UPDATE questions SET type_id = (SELECT id FROM question_types WHERE code = 'professional') WHERE type_id IS NULL");
   }
-  await db.query("UPDATE questions SET type_id = (SELECT id FROM question_types WHERE code = 'professional') WHERE type_id IS NULL");
   if (await hasColumn(db, 'questions', 'enabled')) await db.query("UPDATE questions SET status = CASE WHEN enabled = 1 THEN 'active' ELSE 'archived' END");
   // The current table uses type_id/status; remove legacy category/enabled once migrated.
   if (await hasColumn(db, 'questions', 'category')) await db.query("ALTER TABLE questions DROP COLUMN category");
@@ -442,7 +473,10 @@ async function ensureSimulationColumns(db: Pool) {
 async function ensureQuestionVoiceColumns(db: Pool) {
   // Earlier deployments bound cloned voices to the question selected during
   // upload. Keep existing records, but allow new global voice profiles.
-  await db.query('ALTER TABLE question_voices MODIFY COLUMN question_id BIGINT UNSIGNED NULL');
+  const questionId = await columnInfo(db, 'question_voices', 'question_id');
+  if (questionId && questionId.isNullable !== 'YES') {
+    await db.query('ALTER TABLE question_voices MODIFY COLUMN question_id BIGINT UNSIGNED NULL');
+  }
   if (!(await hasColumn(db, 'tts_settings', 'sambert_websocket_url'))) {
     await db.query('ALTER TABLE tts_settings ADD COLUMN sambert_websocket_url VARCHAR(500) NULL AFTER websocket_url');
   }
@@ -471,7 +505,15 @@ async function ensureQuestionVoiceColumns(db: Pool) {
 }
 async function initializeDatabase(db: Pool) {
   for (const statement of schema) await db.query(statement);
-  await db.query("ALTER TABLE users MODIFY COLUMN status ENUM('pending', 'active', 'rejected', 'deleted') NOT NULL DEFAULT 'active'");
+  const userStatus = await columnInfo(db, 'users', 'status');
+  if (
+    userStatus &&
+    (userStatus.columnType !== "enum('pending','active','rejected','deleted')" ||
+      userStatus.isNullable !== 'NO' ||
+      userStatus.columnDefault !== 'active')
+  ) {
+    await db.query("ALTER TABLE users MODIFY COLUMN status ENUM('pending', 'active', 'rejected', 'deleted') NOT NULL DEFAULT 'active'");
+  }
   await ensureQuestionColumns(db);
   await ensurePracticeRecordColumns(db);
   await ensureAiColumns(db);
@@ -486,18 +528,24 @@ async function initializeDatabase(db: Pool) {
   if (!(await hasColumn(db, 'user_settings', 'default_voice_id'))) {
     await db.query('ALTER TABLE user_settings ADD COLUMN default_voice_id BIGINT UNSIGNED NULL AFTER read_question');
   }
-  await db.query('ALTER TABLE user_settings MODIFY COLUMN read_question TINYINT(1) NOT NULL DEFAULT 1');
+  const readQuestionColumn = await columnInfo(db, 'user_settings', 'read_question');
+  if (
+    readQuestionColumn &&
+    (readQuestionColumn.isNullable !== 'NO' || String(readQuestionColumn.columnDefault) !== '1')
+  ) {
+    await db.query('ALTER TABLE user_settings MODIFY COLUMN read_question TINYINT(1) NOT NULL DEFAULT 1');
+  }
   const [readQuestionMigration] = await db.query<ResultSetHeader>('INSERT IGNORE INTO app_migrations (name) VALUES (?)', ['read_question_default_enabled']);
   if (readQuestionMigration.affectedRows) await db.query('UPDATE user_settings SET read_question = 1 WHERE read_question = 0');
 
   // Seed mock questions only for a completely empty question bank. Existing
   // question types or questions are preserved and never receive extra rows.
-  const [existingTypeRows] = await db.query<RowDataPacket[]>('SELECT COUNT(*) AS count FROM question_types');
-  const [existingQuestionRows] = await db.query<RowDataPacket[]>('SELECT COUNT(*) AS count FROM questions');
-  const seedQuestionBank = Number(existingTypeRows[0].count) === 0 && Number(existingQuestionRows[0].count) === 0;
+  // LIMIT 1 checks stay index-only even when the question bank grows large.
+  const hasQuestionTypes = await hasAnyRow(db, 'question_types');
+  const hasQuestions = await hasAnyRow(db, 'questions');
+  const seedQuestionBank = !hasQuestionTypes && !hasQuestions;
 
-  const [userRows] = await db.query<RowDataPacket[]>('SELECT COUNT(*) AS count FROM users');
-  if (Number(userRows[0].count) === 0) {
+  if (!(await hasAnyRow(db, 'users'))) {
     const adminPassword = await hash('admin123', 12);
     const userPassword = await hash('user123', 12);
     await db.query('INSERT INTO users (username, password_hash, display_name, role, status) VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)', [
@@ -508,7 +556,7 @@ async function initializeDatabase(db: Pool) {
 
   // Type definitions are initialized only for an empty type table.
   // Existing names/descriptions remain managed by the database.
-  if (Number(existingTypeRows[0].count) === 0) {
+  if (!hasQuestionTypes) {
     for (const type of questionTypes) {
       await db.query(
         'INSERT INTO question_types (code, name, description, settings, sort_order, is_active) VALUES (?, ?, ?, ?, ?, 1)',
@@ -516,28 +564,19 @@ async function initializeDatabase(db: Pool) {
       );
     }
   }
-  await migrateLegacyQuestions(db);
+  await runOnceMigration(db, 'legacy_questions_type_status_v1', () => migrateLegacyQuestions(db));
 
-  // These two categories were added after the first release. They are inserted
-  // only when missing so an existing question bank receives the new choices
-  // without overwriting any administrator-managed type or question.
-  if (!seedQuestionBank) {
+  // Existing banks receive the two missing *types* only.  Do not probe the
+  // LONGTEXT question content here: without a content index that turns a small
+  // convenience seed into a full table scan during deployment.
+  if (!seedQuestionBank) await runOnceMigration(db, 'add_literature_and_ideology_seed_questions_v1', async () => {
     for (const type of questionTypes.filter((item) => item.code === 'literature_translation' || item.code === 'ideology')) {
       await db.query(
         'INSERT IGNORE INTO question_types (code, name, description, settings, sort_order, is_active) VALUES (?, ?, ?, ?, ?, 1)',
         [type.code, type.name, type.description, JSON.stringify({ countdownSeconds: 3, autoRecord: true, answerReveal: 'after_recording' }), type.sortOrder],
       );
     }
-    for (const mock of mockQuestions.filter((item) => item.code === 'literature_translation' || item.code === 'ideology')) {
-      const [questionRows] = await db.query<RowDataPacket[]>('SELECT id FROM questions WHERE content = ? LIMIT 1', [mock.content]);
-      if (questionRows.length) continue;
-      const [typeRows] = await db.query<RowDataPacket[]>('SELECT id FROM question_types WHERE code = ? LIMIT 1', [mock.code]);
-      if (!typeRows[0]) continue;
-      await db.query('INSERT INTO questions (type_id, content, answer, subcategory, extra, status) VALUES (?, ?, ?, ?, ?, ?)', [
-        typeRows[0].id, mock.content, mock.answer, mock.subcategory, JSON.stringify({ source: '系统模拟题' }), 'active',
-      ]);
-    }
-  }
+  });
 
   if (seedQuestionBank) {
     for (const mock of mockQuestions) {
@@ -548,8 +587,10 @@ async function initializeDatabase(db: Pool) {
     }
   }
 
-  await db.query('INSERT IGNORE INTO user_settings (user_id) SELECT id FROM users');
-  await db.query('INSERT IGNORE INTO user_api_limits (user_id) SELECT id FROM users');
+  await runOnceMigration(db, 'backfill_user_settings_and_limits_v1', async () => {
+    await db.query('INSERT IGNORE INTO user_settings (user_id) SELECT id FROM users');
+    await db.query('INSERT IGNORE INTO user_api_limits (user_id) SELECT id FROM users');
+  });
 
   const [aiSettingRows] = await db.query<RowDataPacket[]>('SELECT COUNT(*) AS count FROM ai_settings');
   if (Number(aiSettingRows[0].count) === 0) {
@@ -601,14 +642,16 @@ async function initializeDatabase(db: Pool) {
     );
     await db.query('UPDATE ai_settings SET active_prompt_id = ? WHERE id = 1', [promptResult[0].insertId]);
   }
-  const activeConfig = (await db.query<RowDataPacket[]>('SELECT id, provider, base_url AS baseUrl, model, api_key AS apiKey FROM ai_model_configs ORDER BY id LIMIT 1'))[0][0];
-  const activePrompt = (await db.query<RowDataPacket[]>('SELECT id, content FROM ai_prompts ORDER BY id LIMIT 1'))[0][0];
-  if (activeConfig && activePrompt) {
-    await db.query(
-      'UPDATE ai_settings SET active_config_id = COALESCE(active_config_id, ?), active_prompt_id = COALESCE(active_prompt_id, ?), provider = ?, base_url = ?, model = ?, api_key = ?, system_prompt = ? WHERE id = 1',
-      [activeConfig.id, activePrompt.id, activeConfig.provider, activeConfig.baseUrl, activeConfig.model, activeConfig.apiKey || null, activePrompt.content],
-    );
-  }
+  await runOnceMigration(db, 'link_legacy_ai_settings_v1', async () => {
+    const activeConfig = (await db.query<RowDataPacket[]>('SELECT id, provider, base_url AS baseUrl, model, api_key AS apiKey FROM ai_model_configs ORDER BY id LIMIT 1'))[0][0];
+    const activePrompt = (await db.query<RowDataPacket[]>('SELECT id, content FROM ai_prompts ORDER BY id LIMIT 1'))[0][0];
+    if (activeConfig && activePrompt) {
+      await db.query(
+        'UPDATE ai_settings SET active_config_id = COALESCE(active_config_id, ?), active_prompt_id = COALESCE(active_prompt_id, ?), provider = ?, base_url = ?, model = ?, api_key = ?, system_prompt = ? WHERE id = 1',
+        [activeConfig.id, activePrompt.id, activeConfig.provider, activeConfig.baseUrl, activeConfig.model, activeConfig.apiKey || null, activePrompt.content],
+      );
+    }
+  });
 
   const [templateRows] = await db.query<RowDataPacket[]>('SELECT COUNT(*) AS count FROM simulation_templates');
   if (Number(templateRows[0].count) === 0) {
@@ -623,13 +666,15 @@ async function initializeDatabase(db: Pool) {
       '你是一名食品专业保研面试老师，正在进行真实面试。请根据原题、学员的全部已作答内容、当前追问轮次和所在模块，只生成一条自然、具体、可继续作答的老师追问。首轮优先核验核心观点、事实依据或表达中的模糊处；后续轮次要么沿同一问题继续深入，要么换一个能补足判断的信息角度。不得重复已问问题，不要评价、提示、编号或解释，只输出追问问题本身。',
     ]);
   }
-  await db.query(
-    'UPDATE simulation_templates SET followup_prompt = ? WHERE followup_prompt = ?',
-    [
-      '你是一名食品专业保研面试老师，正在进行真实面试。请根据原题、学员的全部已作答内容、当前追问轮次和所在模块，只生成一条自然、具体、可继续作答的老师追问。首轮优先核验核心观点、事实依据或表达中的模糊处；后续轮次要么沿同一问题继续深入，要么换一个能补足判断的信息角度。不得重复已问问题，不要评价、提示、编号或解释，只输出追问问题本身。',
-      '你是一名食品专业保研面试老师。请只根据题目与学员刚才的回答，提出一个自然、具体、有区分度的追问。只输出追问问题本身，不要解释。',
-    ],
-  );
+  await runOnceMigration(db, 'upgrade_default_followup_prompt_v1', async () => {
+    await db.query(
+      'UPDATE simulation_templates SET followup_prompt = ? WHERE followup_prompt = ?',
+      [
+        '你是一名食品专业保研面试老师，正在进行真实面试。请根据原题、学员的全部已作答内容、当前追问轮次和所在模块，只生成一条自然、具体、可继续作答的老师追问。首轮优先核验核心观点、事实依据或表达中的模糊处；后续轮次要么沿同一问题继续深入，要么换一个能补足判断的信息角度。不得重复已问问题，不要评价、提示、编号或解释，只输出追问问题本身。',
+        '你是一名食品专业保研面试老师。请只根据题目与学员刚才的回答，提出一个自然、具体、有区分度的追问。只输出追问问题本身，不要解释。',
+      ],
+    );
+  });
   const [realtimeRows] = await db.query<RowDataPacket[]>('SELECT COUNT(*) AS count FROM realtime_asr_settings');
   if (Number(realtimeRows[0].count) === 0) {
     await db.query('INSERT INTO realtime_asr_settings (id, provider, websocket_url, model, api_key) VALUES (1, ?, ?, ?, ?)', [
