@@ -481,6 +481,9 @@ async function ensureSimulationColumns(db: Pool) {
   if (!(await hasColumn(db, 'simulation_sessions', 'template_config_snapshot'))) {
     await db.query('ALTER TABLE simulation_sessions ADD COLUMN template_config_snapshot JSON NULL AFTER template_name');
   }
+  if (!(await hasColumn(db, 'simulation_evaluations', 'generation_token'))) {
+    await db.query('ALTER TABLE simulation_evaluations ADD COLUMN generation_token CHAR(36) NULL AFTER input_snapshot');
+  }
   if (!(await hasColumn(db, 'simulation_answers', 'question_audio_data'))) {
     await db.query('ALTER TABLE simulation_answers ADD COLUMN question_audio_data LONGBLOB NULL AFTER audio_mime');
   }
