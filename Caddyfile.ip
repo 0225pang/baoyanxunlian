@@ -9,6 +9,10 @@
     format json
   }
   encode zstd gzip
+  # The notification bell polls this endpoint every 15 seconds. It is not an
+  # operational request, so keep it out of the persistent access audit.
+  @notification_poll path /api/notifications
+  log_skip @notification_poll
   @realtime path /ws/realtime-asr
   reverse_proxy @realtime realtime-asr:3001
   reverse_proxy app:3000
