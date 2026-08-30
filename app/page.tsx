@@ -1164,6 +1164,7 @@ function Simulation({
   const [drafts, setDrafts] = useState<SimulationAnswerDraft[]>([]);
   const [elapsed, setElapsed] = useState(0);
   const [stepStartedAt, setStepStartedAt] = useState(0);
+  const [stepElapsed, setStepElapsed] = useState(0);
   const [message, setMessage] = useState("");
   const [followup, setFollowup] = useState<string | null>(null);
   const [followupGenerating, setFollowupGenerating] = useState(false);
@@ -1259,14 +1260,18 @@ function Simulation({
       })
       .catch(() => undefined);
   }, []);
+  const clockFrozen = countdown !== null || dynamicQuestionLoading || followupGenerating;
   useEffect(() => {
-    if (!sessionId) return;
+    if (!sessionId || clockFrozen) return;
     const timer = window.setInterval(
-      () => setElapsed((value) => value + 1),
+      () => {
+        setElapsed((value) => value + 1);
+        if (stepStartedAt) setStepElapsed((value) => value + 1);
+      },
       1000,
     );
     return () => window.clearInterval(timer);
-  }, [sessionId]);
+  }, [sessionId, clockFrozen, stepStartedAt]);
   useEffect(() => {
     if (!sessionId) return;
     setFollowupRound(0);
@@ -1297,9 +1302,6 @@ function Simulation({
   const moduleTimeoutMode =
     templates.find((item) => item.id === Number(templateId))
       ?.moduleTimeoutMode || "warn";
-  const stepElapsed = stepStartedAt
-    ? Math.max(0, Math.floor((Date.now() - stepStartedAt) / 1000))
-    : 0;
   const format = (seconds: number) =>
     String(Math.floor(Math.max(0, seconds) / 60)).padStart(2, "0") +
     ":" +
@@ -1331,10 +1333,7 @@ function Simulation({
               transcriptSegments: liveSegmentsRef.current.length
                 ? [...liveSegmentsRef.current]
                 : undefined,
-              elapsedSeconds: Math.max(
-                0,
-                Math.floor((Date.now() - stepStartedAt) / 1000),
-              ),
+              elapsedSeconds: stepElapsed,
               audio: segmentBlob || undefined,
               questionAudio: questionAudioBlobs[questionAudioKey()],
               followupQuestion: followup || undefined,
@@ -1410,10 +1409,12 @@ function Simulation({
         setDynamicQuestionError("");
         if (nextStep?.kind === "dynamic" && !nextStep.question) {
           setStepStartedAt(0);
+          setStepElapsed(0);
           setCountdown(null);
           void generateDynamicQuestion(nextIndex, nextDrafts);
         } else {
           setStepStartedAt(Date.now());
+          setStepElapsed(0);
         }
       } else {
         finishedRef.current = true;
@@ -1680,6 +1681,7 @@ function Simulation({
         ),
       );
       setStepStartedAt(Date.now());
+      setStepElapsed(0);
       setPromptCycle((value) => value + 1);
       if (!data.audioError) setMessage("");
     } catch (error) {
@@ -1702,6 +1704,7 @@ function Simulation({
       setSteps(data.steps);
       setStepIndex(0);
       setStepStartedAt(firstDynamic ? 0 : Date.now());
+      setStepElapsed(0);
       setElapsed(0);
       setDrafts([]);
       setQuestionAudioBlobs({});
@@ -1946,10 +1949,7 @@ function Simulation({
       transcriptSegments: liveSegmentsRef.current.length
         ? [...liveSegmentsRef.current]
         : undefined,
-      elapsedSeconds: Math.max(
-        0,
-        Math.floor((Date.now() - stepStartedAt) / 1000),
-      ),
+      elapsedSeconds: stepElapsed,
       audio: audioOverride || undefined,
       questionAudio: questionAudioBlobs[questionAudioKey()],
       followupQuestion,
@@ -2002,6 +2002,7 @@ function Simulation({
         );
         setFollowupRound((value) => value + 1);
         setStepStartedAt(Date.now());
+        setStepElapsed(0);
         setPromptCycle((value) => value + 1);
       }
       return;
@@ -2022,9 +2023,13 @@ function Simulation({
       setDynamicQuestionError("");
       if (nextStep?.kind === "dynamic" && !nextStep.question) {
         setStepStartedAt(0);
+        setStepElapsed(0);
         setCountdown(null);
         void generateDynamicQuestion(nextIndex, nextDrafts);
-      } else setStepStartedAt(Date.now());
+      } else {
+        setStepStartedAt(Date.now());
+        setStepElapsed(0);
+      }
     } else {
       // The final follow-up is still the current prompt here.  Cancel it before
       // clearing followup / opening the completion dialog, so it cannot replay.

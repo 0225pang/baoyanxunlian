@@ -9,6 +9,7 @@ services:
       - "3000"
     volumes:
       - question_voice_data:/app/data/question-voices
+      - app_audit_logs:/app/data/app-logs
 
   realtime-asr:
     build:
@@ -55,3 +56,4 @@ volumes:
   caddy_config:
   caddy_access_logs:
   question_voice_data:
+  app_audit_logs:

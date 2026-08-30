@@ -5,10 +5,10 @@ import { assertApiAccess, logApiUsage, readTokenUsage } from '@/lib/usage';
 import { createUserNotification } from '@/lib/notifications';
 import type { RowDataPacket } from 'mysql2/promise';
 
-type Input = { sessionId: number; templateName: string; elapsedSeconds: number; answers: unknown[] };
+type Input = { sessionId: number; templateName: string; elapsedSeconds: number; simulationConfiguration: unknown | null; answers: unknown[] };
 
 async function sessionForUser(currentId: number, role: string, sessionId: number) {
-  const rows = await query<RowDataPacket[]>('SELECT id, user_id AS userId, template_name AS templateName, elapsed_seconds AS elapsedSeconds, status FROM simulation_sessions WHERE id = ? LIMIT 1', [sessionId]);
+  const rows = await query<RowDataPacket[]>('SELECT id, user_id AS userId, template_name AS templateName, template_config_snapshot AS templateConfigSnapshot, elapsed_seconds AS elapsedSeconds, status FROM simulation_sessions WHERE id = ? LIMIT 1', [sessionId]);
   const session = rows[0];
   if (!session || (role !== 'admin' && Number(session.userId) !== currentId)) throw new Error('FORBIDDEN');
   if (String(session.status) !== 'completed') throw new Error('SIMULATION_NOT_COMPLETE');
@@ -19,7 +19,8 @@ async function buildInput(session: RowDataPacket): Promise<Input> {
   const answers = await query<RowDataPacket[]>(`SELECT module_index AS moduleIndex, module_title AS moduleTitle, question, answer, transcript,
     transcript_segments AS transcriptSegments, followup_question AS followupQuestion, elapsed_seconds AS elapsedSeconds
     FROM simulation_answers WHERE session_id = ? ORDER BY module_index ASC, id ASC`, [Number(session.id)]);
-  return { sessionId: Number(session.id), templateName: String(session.templateName || ''), elapsedSeconds: Number(session.elapsedSeconds || 0), answers: answers.map((answer) => ({
+  const snapshot = session.templateConfigSnapshot ? (typeof session.templateConfigSnapshot === 'string' ? safeJsonParse(String(session.templateConfigSnapshot)) : session.templateConfigSnapshot) : null;
+  return { sessionId: Number(session.id), templateName: String(session.templateName || ''), elapsedSeconds: Number(session.elapsedSeconds || 0), simulationConfiguration: snapshot, answers: answers.map((answer) => ({
     moduleIndex: Number(answer.moduleIndex), moduleTitle: String(answer.moduleTitle || ''), question: String(answer.question || ''), answer: String(answer.answer || ''), transcript: answer.transcript ? String(answer.transcript) : null,
     transcriptSegments: answer.transcriptSegments ? (typeof answer.transcriptSegments === 'string' ? safeJsonParse(String(answer.transcriptSegments)) : answer.transcriptSegments) : null,
     followupQuestion: answer.followupQuestion ? String(answer.followupQuestion) : null, elapsedSeconds: Number(answer.elapsedSeconds || 0),

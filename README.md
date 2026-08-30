@@ -103,3 +103,31 @@ docker compose -p baoyanxunlian up -d --build --force-recreate
 ```
 
 数据库和录音都在 MySQL 中，重新构建容器不会丢失数据。生产环境建议使用 `mysqldump` 或阿里云 RDS/云数据库备份策略定期备份 `baoyanxunlian`。
+
+## 运行日志与 I/O 追查
+
+Caddy 会把访问审计日志持久化到 Docker 命名卷中，记录请求路径、状态码、耗时、响应大小和客户端地址；不记录请求或响应正文，也会自动跳过通知铃铛的轮询接口 `/api/notifications`。日志滚动保存，避免单个文件无限增长。
+
+在应用服务器的项目目录执行以下命令：
+
+```bash
+# HTTPS 域名入口：查看最近 300 条访问记录
+docker compose -p baoyanxunlian exec caddy sh -lc 'tail -n 300 /var/log/caddy/https-access.json'
+
+# IP / HTTP 入口：查看最近 300 条访问记录
+docker compose -p baoyanxunlian exec caddy-ip sh -lc 'tail -n 300 /var/log/caddy/http-ip-access.json'
+
+# 筛选指定时间段，例如 2026-08-30 23:18 至 23:25
+docker compose -p baoyanxunlian exec caddy-ip sh -lc "grep '2026-08-30T23:1[89]\|2026-08-30T23:2[0-5]' /var/log/caddy/http-ip-access.json"
+
+# 找出最近日志中的慢请求（耗时至少 2 秒）和大响应（至少 1 MiB）；Caddy 镜像无需额外安装 jq
+docker compose -p baoyanxunlian exec caddy-ip sh -lc "tail -n 5000 /var/log/caddy/http-ip-access.json | grep -E '\"duration\":([2-9]|[1-9][0-9]+)|\"size\":[1-9][0-9]{6,}'"
+
+# 查看应用容器的最近错误与超时
+docker compose -p baoyanxunlian logs --since 30m --tail 500 app
+
+# 查看应用持久化的慢 SQL / SQL 失败记录（默认仅记录 >= 1000ms 的查询及所有失败）
+docker compose -p baoyanxunlian exec app sh -lc 'tail -n 300 /app/data/app-logs/mysql-slow-$(date -u +%F).jsonl'
+```
+
+访问审计可以把 I/O 异常关联到具体 HTTP 路由、客户端、响应体积和耗时；应用还会持久记录慢 SQL 的语句模板、耗时、返回行数/影响行数与失败原因（不记录参数值）。默认阈值为 1000ms，可用 `DB_SLOW_QUERY_MS` 调整。若仍需 MySQL 服务端级别的交叉验证，可启用低开销慢查询日志；不要开启 `general_log`，它会产生大量额外 I/O。

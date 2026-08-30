@@ -1,8 +1,23 @@
 import mysql, { type Pool, type ResultSetHeader, type RowDataPacket } from 'mysql2/promise';
 import { hash } from 'bcryptjs';
+import { appendFile } from 'node:fs/promises';
+import path from 'node:path';
 
 let pool: Pool | null = null;
 let initialized: Promise<void> | null = null;
+
+// Keep SQL diagnostics low-volume: only slow or failed statements are written.
+// Values are never recorded, so API keys, answers and audio metadata cannot
+// leak into the audit file. One file per day also prevents a single file from
+// becoming unwieldy during a long-running deployment.
+const slowQueryThresholdMs = Math.max(0, Number(process.env.DB_SLOW_QUERY_MS || 1000));
+function normalizedSql(sql: string) { return sql.replace(/\s+/g, ' ').trim().slice(0, 4000); }
+function writeDbAudit(entry: Record<string, unknown>) {
+  if (!slowQueryThresholdMs) return;
+  const day = new Date().toISOString().slice(0, 10);
+  const file = path.join('/app/data/app-logs', `mysql-slow-${day}.jsonl`);
+  void appendFile(file, JSON.stringify({ at: new Date().toISOString(), ...entry }) + '\n', 'utf8').catch(() => undefined);
+}
 
 const questionTypes = [
   { code: 'professional', name: '专业问题', description: '食品专业笔试、面试和专业课问题', sortOrder: 1 },
@@ -463,6 +478,9 @@ async function ensureSimulationColumns(db: Pool) {
   if (!(await hasColumn(db, 'simulation_templates', 'dynamic_tts_config'))) {
     await db.query('ALTER TABLE simulation_templates ADD COLUMN dynamic_tts_config JSON NULL AFTER module_timeout_mode');
   }
+  if (!(await hasColumn(db, 'simulation_sessions', 'template_config_snapshot'))) {
+    await db.query('ALTER TABLE simulation_sessions ADD COLUMN template_config_snapshot JSON NULL AFTER template_name');
+  }
   if (!(await hasColumn(db, 'simulation_answers', 'question_audio_data'))) {
     await db.query('ALTER TABLE simulation_answers ADD COLUMN question_audio_data LONGBLOB NULL AFTER audio_mime');
   }
@@ -728,13 +746,29 @@ export async function getDb() {
 }
 
 export async function query<T extends RowDataPacket[] = RowDataPacket[]>(sql: string, params: unknown[] = []) {
-  const db = await getDb();
-  const [rows] = await db.query<T>(sql, params);
-  return rows;
+  const startedAt = performance.now();
+  try {
+    const db = await getDb();
+    const [rows] = await db.query<T>(sql, params);
+    const durationMs = Math.round(performance.now() - startedAt);
+    if (durationMs >= slowQueryThresholdMs) writeDbAudit({ operation: 'query', durationMs, parameterCount: params.length, rowCount: Array.isArray(rows) ? rows.length : null, sql: normalizedSql(sql) });
+    return rows;
+  } catch (error) {
+    writeDbAudit({ operation: 'query', durationMs: Math.round(performance.now() - startedAt), parameterCount: params.length, sql: normalizedSql(sql), error: error instanceof Error ? error.message.slice(0, 1000) : String(error).slice(0, 1000) });
+    throw error;
+  }
 }
 
 export async function execute(sql: string, params: Array<string | number | boolean | null | Buffer | Date> = []) {
-  const db = await getDb();
-  const [result] = await db.execute<ResultSetHeader>(sql, params);
-  return result;
+  const startedAt = performance.now();
+  try {
+    const db = await getDb();
+    const [result] = await db.execute<ResultSetHeader>(sql, params);
+    const durationMs = Math.round(performance.now() - startedAt);
+    if (durationMs >= slowQueryThresholdMs) writeDbAudit({ operation: 'execute', durationMs, parameterCount: params.length, affectedRows: result.affectedRows, sql: normalizedSql(sql) });
+    return result;
+  } catch (error) {
+    writeDbAudit({ operation: 'execute', durationMs: Math.round(performance.now() - startedAt), parameterCount: params.length, sql: normalizedSql(sql), error: error instanceof Error ? error.message.slice(0, 1000) : String(error).slice(0, 1000) });
+    throw error;
+  }
 }

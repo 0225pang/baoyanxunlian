@@ -34,7 +34,7 @@ export async function POST(request: Request) {
     const user = await requireUser();
     const body = (await request.json()) as { templateId?: number };
     const rows = await query<RowDataPacket[]>(
-      "SELECT id, name, modules, total_seconds AS totalSeconds, module_timeout_mode AS moduleTimeoutMode, dynamic_tts_config AS dynamicTtsConfig FROM simulation_templates WHERE id = ? AND is_active = 1 LIMIT 1",
+      "SELECT id, name, description, modules, total_seconds AS totalSeconds, module_timeout_mode AS moduleTimeoutMode, dynamic_tts_config AS dynamicTtsConfig, followup_prompt AS followupPrompt FROM simulation_templates WHERE id = ? AND is_active = 1 LIMIT 1",
       [Number(body.templateId)],
     );
     const template = rows[0];
@@ -124,12 +124,24 @@ export async function POST(request: Request) {
         });
       }
     }
+    // Preserve the exact flow used by this session. Administrators can edit a
+    // template later, but historical reviews must use the original settings.
+    const templateConfigSnapshot = {
+      name: String(template.name),
+      description: template.description ? String(template.description) : null,
+      modules,
+      totalSeconds: Number(template.totalSeconds),
+      moduleTimeoutMode: ["immediate_advance", "auto_advance"].includes(String(template.moduleTimeoutMode)) ? String(template.moduleTimeoutMode) : "warn",
+      dynamicTtsConfig: typeof template.dynamicTtsConfig === 'string' ? JSON.parse(template.dynamicTtsConfig || '{}') : (template.dynamicTtsConfig || { provider: 'browser' }),
+      followupPrompt: template.followupPrompt ? String(template.followupPrompt) : null,
+    };
     const result = await execute(
-      "INSERT INTO simulation_sessions (user_id, template_id, template_name, total_seconds) VALUES (?, ?, ?, ?)",
+      "INSERT INTO simulation_sessions (user_id, template_id, template_name, template_config_snapshot, total_seconds) VALUES (?, ?, ?, ?, ?)",
       [
         user.id,
         Number(template.id),
         String(template.name),
+        JSON.stringify(templateConfigSnapshot),
         Number(template.totalSeconds),
       ],
     );
