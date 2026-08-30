@@ -12,7 +12,18 @@ import { pushNotification } from "@/lib/notifications-client";
 import { ChangeEvent, FormEvent, MouseEvent, useCallback, useEffect, useRef, useState } from "react";
 
 type Category = string;
-type BrowserKey = "chrome" | "edge" | "quark" | "browser360" | "lenovo";
+type BrowserKey =
+  | "chrome"
+  | "edge"
+  | "browser360"
+  | "browser360speed"
+  | "lenovo"
+  | "quark"
+  | "opera"
+  | "qq"
+  | "sogou"
+  | "brave"
+  | "centbrowser";
 type User = {
   id: number;
   username: string;
@@ -1172,6 +1183,9 @@ function Simulation({
   const fullChunks = useRef<Blob[]>([]);
   const fullAudioRef = useRef<Blob | null>(null);
   const finishedRef = useRef(false);
+  // State updates are asynchronous.  This ref prevents a just-cleared follow-up
+  // from scheduling another countdown while the final submission is in flight.
+  const submissionRef = useRef(false);
   const moduleTimeoutRef = useRef("");
   const segmentRecordingStartedAt = useRef(0);
   const speechRunId = useRef(0);
@@ -1674,6 +1688,7 @@ function Simulation({
       setFullAudio(null);
       fullAudioRef.current = null;
       finishedRef.current = false;
+      submissionRef.current = false;
       moduleTimeoutRef.current = "";
       segmentRecordingStartedAt.current = 0;
       setReading(false);
@@ -1721,22 +1736,45 @@ function Simulation({
     playCue("recording");
     await startRecording();
   }, [playCue]);
+  function stopQuestionReading() {
+    speechRunId.current += 1;
+    window.speechSynthesis?.cancel();
+    questionPromptAudio.current?.pause();
+    questionPromptAudio.current = null;
+    setReading(false);
+    setCountdown(null);
+  }
   const countdownStepRef = useRef("");
   useEffect(() => {
     const promptKey = `${sessionId}:${stepIndex}:${followup ? "followup" : "main"}:${promptCycle}`;
-    if (!sessionId || promptKey === countdownStepRef.current) return;
+    if (
+      !sessionId ||
+      submitting ||
+      finishedRef.current ||
+      submissionRef.current ||
+      promptKey === countdownStepRef.current
+    )
+      return;
     countdownStepRef.current = promptKey;
 
     if (stepStartedAt) {
       setReading(false);
       setCountdown(3);
     }
-  }, [sessionId, stepIndex, stepStartedAt, followup, promptCycle]);
+  }, [sessionId, stepIndex, stepStartedAt, followup, promptCycle, submitting]);
   useEffect(() => {
-    if (!sessionId || countdown === null) return;
+    if (
+      !sessionId ||
+      countdown === null ||
+      submitting ||
+      finishedRef.current ||
+      submissionRef.current
+    )
+      return;
     playCue("countdown", countdown);
     setMessage(`准备开始 · ${countdown}`);
     const timer = window.setTimeout(() => {
+      if (submissionRef.current || finishedRef.current) return;
       if (countdown > 1) {
         setCountdown(countdown - 1);
         return;
@@ -1751,12 +1789,19 @@ function Simulation({
         let completed = false;
         setReading(true);
         const finishReading = () => {
-          if (completed || speechRunId.current !== runId) return;
+          if (
+            completed ||
+            speechRunId.current !== runId ||
+            submissionRef.current ||
+            finishedRef.current
+          )
+            return;
           completed = true;
           setReading(false);
           if (autoRecord) void startRecordingWithCue();
         };
         const browserFallback = () => {
+          if (submissionRef.current || finishedRef.current) return;
           if (current?.suppressBrowserRead && !followup) { finishReading(); return; }
           if (!("speechSynthesis" in window)) { finishReading(); return; }
           window.speechSynthesis.cancel();
@@ -1781,6 +1826,7 @@ function Simulation({
   }, [
     sessionId,
     countdown,
+    submitting,
     current,
     questionAudioBlobs,
     followup,
@@ -1946,13 +1992,15 @@ function Simulation({
         setCountdown(null);
         void generateDynamicQuestion(nextIndex, nextDrafts);
       } else setStepStartedAt(Date.now());
-    } else await finish(nextDrafts);
+    } else {
+      // The final follow-up is still the current prompt here.  Cancel it before
+      // clearing followup / opening the completion dialog, so it cannot replay.
+      stopQuestionReading();
+      await finish(nextDrafts);
+    }
   }
   async function exitSimulation() {
-    speechRunId.current += 1;
-    window.speechSynthesis?.cancel();
-    questionPromptAudio.current?.pause();
-    questionPromptAudio.current = null;
+    stopQuestionReading();
     if (recorder.current?.state === "recording") await stopRecording();
     else stopRealtimeTranscription(true);
     if (fullRecorder.current?.state === "recording") await stopFullRecording();
@@ -1968,7 +2016,9 @@ function Simulation({
     onBack();
   }
   async function finish(finalDrafts = drafts) {
-    if (!sessionId || submitting) return;
+    if (!sessionId || submitting || submissionRef.current) return;
+    submissionRef.current = true;
+    stopQuestionReading();
     setSubmitting(true);
     try {
       const form = new FormData();
@@ -2017,6 +2067,7 @@ function Simulation({
     } catch (error) {
       setMessage((error as Error).message);
       setSubmitting(false);
+      submissionRef.current = false;
     }
   }
   if (!sessionId)
@@ -4051,10 +4102,29 @@ function Settings({
   const browserUrls = {
     chrome: "chrome://flags/#unsafely-treat-insecure-origin-as-secure",
     edge: "edge://flags/#unsafely-treat-insecure-origin-as-secure",
+    browser360: "se://flags/#unsafely-treat-insecure-origin-as-secure",
+    browser360speed: "chrome://flags/#unsafely-treat-insecure-origin-as-secure",
+    lenovo: "slbrowser://flags/#unsafely-treat-insecure-origin-as-secure",
     quark: "quark://flags/#unsafely-treat-insecure-origin-as-secure",
-    browser360: "chrome://flags/#unsafely-treat-insecure-origin-as-secure",
-    lenovo: "chrome://flags/#unsafely-treat-insecure-origin-as-secure",
+    opera: "opera://flags/#unsafely-treat-insecure-origin-as-secure",
+    qq: "qqbrowser://flags/#unsafely-treat-insecure-origin-as-secure",
+    sogou: "sogou://flags/#unsafely-treat-insecure-origin-as-secure",
+    brave: "brave://flags/#unsafely-treat-insecure-origin-as-secure",
+    centbrowser: "centbrowser://flags/#unsafely-treat-insecure-origin-as-secure",
   } as const;
+  const browserOptions: Array<{ key: BrowserKey; label: string; note?: string }> = [
+    { key: "edge", label: "Microsoft Edge（推荐）" },
+    { key: "chrome", label: "Google Chrome（推荐）" },
+    { key: "browser360", label: "360 安全浏览器", note: "仅极速 / Chromium 内核" },
+    { key: "browser360speed", label: "360 极速浏览器 X" },
+    { key: "lenovo", label: "联想浏览器" },
+    { key: "quark", label: "夸克 PC" },
+    { key: "opera", label: "Opera 欧朋" },
+    { key: "qq", label: "QQ 浏览器 PC" },
+    { key: "sogou", label: "搜狗浏览器", note: "仅极速模式" },
+    { key: "brave", label: "Brave" },
+    { key: "centbrowser", label: "百分浏览器" },
+  ];
 
   useEffect(() => {
     setOrigin(window.location.origin);
@@ -4194,8 +4264,7 @@ function Settings({
           <h2>HTTP 环境录音权限</h2>
           <p>
             当前使用 IP + HTTP
-            时，浏览器默认不会开放麦克风。打开配置指引，可复制当前网址并快速进入
-            Chrome / Edge 的安全设置。
+            时，浏览器默认不会开放麦克风。电脑端建议优先使用最新版 Microsoft Edge 或 Google Chrome；打开配置指引后，可复制当前网址并进入对应浏览器的实验设置。
           </p>
         </div>
         <button
@@ -4233,7 +4302,7 @@ function Settings({
             <span className="section-kicker">MICROPHONE ACCESS</span>
             <h2 id="permission-guide-title">开启 HTTP 录音权限</h2>
             <p className="permission-intro">
-              网页不能直接修改浏览器实验性开关，但可以帮你准备好要加入白名单的地址。
+              这是仅用于电脑端 HTTP 调试的临时方案：网页不能直接修改浏览器实验性开关，但可以帮你准备好要加入白名单的地址。
             </p>
             <ol className="permission-steps">
               <li>
@@ -4248,7 +4317,7 @@ function Settings({
                 <div>
                   <strong>打开浏览器实验设置</strong>
                   <small>
-                    Chrome 或 Edge 中搜索{" "}
+                    在下方选择你正在使用的电脑浏览器，或手动打开对应完整 flags 地址并搜索{" "}
                     <code>unsafely-treat-insecure-origin-as-secure</code>。
                   </small>
                 </div>
@@ -4273,25 +4342,24 @@ function Settings({
                 {copied ? "已复制" : "复制地址"}
               </button>
             </div>
-            <div className="permission-links">
-              <button
-                type="button"
-                onClick={() => openBrowserSettings("chrome")}
-              >
-                打开 Chrome 设置
-              </button>
-              <button type="button" onClick={() => openBrowserSettings("edge")}>
-                打开 Edge 设置
-              </button>
-              <button type="button" onClick={() => openBrowserSettings("quark")}>
-                打开夸克设置
-              </button>
-              <button type="button" onClick={() => openBrowserSettings("browser360")}>
-                打开 360 设置
-              </button>
-              <button type="button" onClick={() => openBrowserSettings("lenovo")}>
-                打开联想设置
-              </button>
+            <div className="permission-links" aria-label="浏览器实验设置快捷入口">
+              {browserOptions.map((browser) => (
+                <button
+                  type="button"
+                  key={browser.key}
+                  onClick={() => openBrowserSettings(browser.key)}
+                  title={browserUrls[browser.key]}
+                >
+                  <span>{browser.label}</span>
+                  {browser.note && <small>{browser.note}</small>}
+                </button>
+              ))}
+            </div>
+            <div className="permission-mobile-note">
+              <strong>手机 / 平板请使用 HTTPS</strong>
+              <p>
+                Android Chrome、Android Edge、iPhone Safari / Edge 均可在 HTTPS 页面申请麦克风；手机浏览器通常没有这个 flags 开关，HTTP + IP 无法可靠录音。手机上的自动朗读、倒计时和开始录音提示音还会受系统自动播放策略限制，视觉倒计时与录音功能不受影响；需要稳定声音提示时，请先主动点击一次“开始录音”或试听。
+              </p>
             </div>
             {browserHint && (
               <div className="browser-settings-fallback" role="status">
@@ -4306,8 +4374,7 @@ function Settings({
               </div>
             )}
             <p className="permission-warning">
-              提示：这是浏览器临时兼容方案，仅建议本机开发使用。正式上线请使用
-              HTTPS。
+              提示：360 安全浏览器、搜狗浏览器请切换到极速 / Chromium 内核；兼容模式无效。QQ 浏览器手机版不支持该 flag。正式上线和所有手机访问请使用 HTTPS。
             </p>
           </div>
         </div>
