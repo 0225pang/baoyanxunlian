@@ -1,6 +1,6 @@
 import { apiError, requireUser } from "@/lib/auth";
 import { execute, query } from "@/lib/db";
-import { fixedQuestionContentHash } from '@/lib/simulation-fixed-voices';
+import { fixedQuestionContentHash, hasSimulationFixedVoiceFile } from '@/lib/simulation-fixed-voices';
 import type { RowDataPacket } from "mysql2/promise";
 
 type Module = {
@@ -69,15 +69,24 @@ export async function POST(request: Request) {
               { error: "固定题目或开场任务缺少题目内容，请在模拟配置中补充" },
               { status: 400 },
             );
-          const fixedVoices = await query<RowDataPacket[]>(`SELECT id FROM simulation_fixed_voices
+          const fixedVoiceCandidates = await query<(RowDataPacket & { id: number; outputPath: string | null })[]>(`SELECT id, output_path AS outputPath FROM simulation_fixed_voices
             WHERE template_id = ? AND module_id = ? AND content_hash = ?
               AND status = 'ready' AND output_path IS NOT NULL
-            ORDER BY RAND() LIMIT 1`, [Number(template.id), String(module.id || ''), fixedQuestionContentHash(prompt)]);
+            ORDER BY id DESC`, [Number(template.id), String(module.id || ''), fixedQuestionContentHash(prompt)]);
+          // A deployment before persistent storage was added can leave a
+          // historical database row whose file is gone.  Do not randomly pick
+          // that row and silently fall back to browser TTS.
+          const usableFixedVoices = (await Promise.all(fixedVoiceCandidates.map(async (voice) =>
+            (await hasSimulationFixedVoiceFile(voice.outputPath)) ? voice : null,
+          ))).filter((voice): voice is RowDataPacket & { id: number; outputPath: string | null } => voice !== null);
+          const selectedFixedVoice = usableFixedVoices.length
+            ? usableFixedVoices[Math.floor(Math.random() * usableFixedVoices.length)]
+            : null;
           steps.push({
             ...module,
             id: module.id + "-" + index,
             templateModuleId: module.id,
-            questionVoiceUrl: fixedVoices[0] ? `/api/simulation-fixed-voices/${Number(fixedVoices[0].id)}/audio` : null,
+            questionVoiceUrl: selectedFixedVoice ? `/api/simulation-fixed-voices/${Number(selectedFixedVoice.id)}/audio` : null,
             question: prompt,
             category: module.kind === "fixed" ? "固定题目" : "开场任务",
           });

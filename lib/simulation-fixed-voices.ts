@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { execute, query } from '@/lib/db';
 import { synthesizeConfiguredQuestionVoice } from '@/lib/question-voices';
@@ -8,7 +8,11 @@ import type { RowDataPacket } from 'mysql2/promise';
 type FixedModule = { id?: unknown; kind?: unknown; prompt?: unknown };
 type FixedVoiceRow = RowDataPacket & { id: number; status: string; outputPath: string | null };
 
-const storageRoot = path.join(process.cwd(), 'data', 'simulation-fixed-voices');
+// Keep these files below question-voices: that directory is mounted as a
+// Docker volume.  Keeping this separate from the database is intentional, but
+// it must survive an app-container replacement just like ordinary question
+// voice files do.
+const storageRoot = path.join(process.cwd(), 'data', 'question-voices', 'simulation-fixed-voices');
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 const clamp = (value: unknown, min: number, max: number, fallback: number) => {
   const parsed = Number(value);
@@ -73,6 +77,18 @@ export async function readSimulationFixedVoiceFile(filePath: string | null) {
   try { return await readFile(resolved); } catch { return null; }
 }
 
+export async function hasSimulationFixedVoiceFile(filePath: string | null) {
+  if (!filePath) return false;
+  const resolved = path.resolve(filePath);
+  const root = path.resolve(storageRoot) + path.sep;
+  if (!resolved.startsWith(root)) return false;
+  try {
+    return (await stat(resolved)).isFile();
+  } catch {
+    return false;
+  }
+}
+
 function fixedTasks(modules: unknown) {
   const values = Array.isArray(modules) ? modules : [];
   return values.flatMap((item) => {
@@ -97,7 +113,10 @@ export async function syncSimulationFixedVoices(templateId: number, modules: unk
       FROM simulation_fixed_voices WHERE template_id = ? AND module_id = ? AND content_hash = ? AND config_hash = ? LIMIT 1`,
     [templateId, task.moduleId, contentHash, currentConfigHash]);
     const row = existing[0];
-    if (row?.status === 'ready' && row.outputPath) { result.skipped += 1; continue; }
+    if (row?.status === 'ready' && await hasSimulationFixedVoiceFile(row.outputPath)) {
+      result.skipped += 1;
+      continue;
+    }
     if (row?.status === 'processing') { result.skipped += 1; continue; }
 
     let voiceId = Number(row?.id || 0);

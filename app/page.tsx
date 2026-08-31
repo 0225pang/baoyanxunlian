@@ -1194,6 +1194,7 @@ function Simulation({
   const segmentRecordingStartedAt = useRef(0);
   const speechRunId = useRef(0);
   const questionPromptAudio = useRef<HTMLAudioElement | null>(null);
+  const questionReadingSafetyTimer = useRef<number | null>(null);
   const audioContext = useRef<AudioContext | null>(null);
   const [liveTranscript, setLiveTranscript] = useState("");
   const [realtimeStatus, setRealtimeStatus] = useState("");
@@ -1720,6 +1721,10 @@ function Simulation({
   }, [playCue]);
   function stopQuestionReading() {
     speechRunId.current += 1;
+    if (questionReadingSafetyTimer.current !== null) {
+      window.clearTimeout(questionReadingSafetyTimer.current);
+      questionReadingSafetyTimer.current = null;
+    }
     window.speechSynthesis?.cancel();
     questionPromptAudio.current?.pause();
     questionPromptAudio.current = null;
@@ -1780,7 +1785,19 @@ function Simulation({
             return;
           completed = true;
           setReading(false);
-          if (autoRecord) void startRecordingWithCue();
+          // Some browser TTS engines emit `end` a little before their final
+          // samples leave the speaker.  Keep a tiny, cancellable gap so the
+          // auto recorder can never capture the question itself.
+          if (autoRecord) {
+            questionReadingSafetyTimer.current = window.setTimeout(() => {
+              questionReadingSafetyTimer.current = null;
+              if (
+                speechRunId.current === runId &&
+                !submissionRef.current &&
+                !finishedRef.current
+              ) void startRecordingWithCue();
+            }, 250);
+          }
         };
         const browserFallback = () => {
           if (submissionRef.current || finishedRef.current) return;
