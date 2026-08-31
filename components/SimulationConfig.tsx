@@ -35,11 +35,22 @@ type CloneVoice = { id: number; name: string; model: string; voiceId: string | n
 type RealtimeConfig = {
   provider: string;
   websocketUrl: string;
+  workspaceId?: string;
   model: string;
   apiKey?: string;
   apiKeySet?: boolean;
   apiKeyPreview?: string;
 };
+
+const REALTIME_ASR_MODELS = [
+  { value: "qwen-audio-3.0-asr-flash-streaming", label: "Qwen Audio 3.0 ASR Flash（流式）" },
+  { value: "paraformer-realtime-v2", label: "Paraformer Realtime v2" },
+  { value: "paraformer-realtime-v1", label: "Paraformer Realtime v1（16 kHz）" },
+];
+const PARAFORMER_WORKSPACE_URL = (workspaceId: string) =>
+  workspaceId.trim()
+    ? `wss://${workspaceId.trim()}.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference`
+    : "";
 
 const DEFAULT_FOLLOWUP_PROMPT =
   "你是一名食品专业保研面试老师，正在进行真实面试。请根据原题、学员的全部已作答内容、当前追问轮次和所在模块，只生成一条自然、具体、可继续作答的老师追问。第 1 轮优先核验核心观点、事实依据或表达中的模糊处；后续轮次要么沿同一问题继续深入，要么换一个能补足判断的信息角度。不得重复已问问题，不要评价、提示、编号或解释，只输出追问问题本身。";
@@ -632,6 +643,25 @@ export default function SimulationConfig() {
                 />
               </label>
               <label>
+                百炼业务空间 ID（Paraformer 必填）
+                <input
+                  value={realtime.workspaceId || ""}
+                  onChange={(event) => {
+                    const workspaceId = event.target.value.trim();
+                    const isParaformer = realtime.model.startsWith("paraformer-realtime-");
+                    setRealtime({
+                      ...realtime,
+                      workspaceId,
+                      websocketUrl: isParaformer
+                        ? PARAFORMER_WORKSPACE_URL(workspaceId)
+                        : realtime.websocketUrl,
+                    });
+                  }}
+                  placeholder="例如：llm-xxxxxxxx"
+                />
+                <small>Paraformer 仅支持北京地域；填写后会自动使用该业务空间的专属 WebSocket 地址。</small>
+              </label>
+              <label>
                 WebSocket 地址
                 <input
                   value={realtime.websocketUrl}
@@ -645,12 +675,27 @@ export default function SimulationConfig() {
               </label>
               <label>
                 模型名称
-                <input
+                <select
                   value={realtime.model}
-                  onChange={(event) =>
-                    setRealtime({ ...realtime, model: event.target.value })
-                  }
-                />
+                  onChange={(event) => {
+                    const model = event.target.value;
+                    const isParaformer = model.startsWith("paraformer-realtime-");
+                    const workspaceUrl = isParaformer
+                      ? PARAFORMER_WORKSPACE_URL(realtime.workspaceId || "")
+                      : "";
+                    setRealtime({
+                      ...realtime,
+                      model,
+                      websocketUrl: workspaceUrl || realtime.websocketUrl,
+                    });
+                  }}
+                >
+                  {REALTIME_ASR_MODELS.map((item) => (
+                    <option key={item.value} value={item.value}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
               </label>
               <label>
                 API Key{" "}

@@ -52,7 +52,7 @@ async function realtimeQuota(userId) {
 }
 async function getSettings() {
   const [rows] = await database.query(
-    'SELECT provider, websocket_url AS websocketUrl, model, api_key AS apiKey FROM realtime_asr_settings WHERE id = 1 LIMIT 1',
+    'SELECT provider, websocket_url AS websocketUrl, workspace_id AS workspaceId, model, api_key AS apiKey FROM realtime_asr_settings WHERE id = 1 LIMIT 1',
   );
   const setting = rows[0];
   if (!setting?.websocketUrl || !setting?.model || !setting?.apiKey) throw new Error('管理员尚未完成实时语音识别 API 配置');
@@ -61,6 +61,18 @@ async function getSettings() {
 }
 
 function startPayload(taskId, setting, sampleRate) {
+  const isParaformer = /^paraformer-realtime-(?:v1|v2)$/.test(String(setting.model || ''));
+  const parameters = { sample_rate: sampleRate, format: 'pcm' };
+  if (isParaformer) {
+    Object.assign(parameters, { disfluency_removal_enabled: false });
+    if (setting.model === 'paraformer-realtime-v2') {
+      Object.assign(parameters, {
+        punctuation_prediction_enabled: true,
+        semantic_punctuation_enabled: false,
+        max_sentence_silence: 1300,
+      });
+    }
+  }
   return JSON.stringify({
     header: { action: 'run-task', task_id: taskId, streaming: 'duplex' },
     payload: {
@@ -68,7 +80,7 @@ function startPayload(taskId, setting, sampleRate) {
       task: 'asr',
       function: 'recognition',
       model: setting.model,
-      parameters: { sample_rate: sampleRate, format: 'pcm' },
+      parameters,
       input: {},
     },
   });
@@ -136,12 +148,15 @@ server.on('connection', (client) => {
     try { remainingSeconds = await realtimeQuota(userId); } catch (error) { send(client, { type: 'error', error: error instanceof Error ? error.message : '实时转写不可用' }); client.close(1008, 'quota'); return; }
 
     usageUserId = userId; started = true;
-    const sampleRate = Number(message.sampleRate) || 16000;
+    let sampleRate = Number(message.sampleRate) || 16000;
     taskId = String(message.taskId || randomUUID());
     try {
       const setting = await getSettings(); usageModel = setting.model;
+      if (setting.model === 'paraformer-realtime-v1') sampleRate = 16000;
       if (remainingSeconds > 0) quotaTimer = setTimeout(() => { send(client, { type: 'error', error: '实时转写本段已达到本月剩余额度，录音将停止' }); recordUsage(); closeUpstream(true); try { client.close(1008, 'quota reached'); } catch { /* closed */ } }, remainingSeconds * 1000);
-      upstream = new WebSocket(setting.websocketUrl, { headers: { Authorization: `Bearer ${setting.apiKey}` }, maxPayload: MAX_MESSAGE_BYTES });
+      const headers = { Authorization: `Bearer ${setting.apiKey}` };
+      if (setting.workspaceId) headers['X-DashScope-WorkSpace'] = String(setting.workspaceId);
+      upstream = new WebSocket(setting.websocketUrl, { headers, maxPayload: MAX_MESSAGE_BYTES });
       upstream.on('open', () => {
         if (!upstream) return;
         upstream.send(startPayload(taskId, setting, sampleRate));
