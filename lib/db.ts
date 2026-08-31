@@ -227,7 +227,6 @@ const schema = [
     id TINYINT UNSIGNED NOT NULL PRIMARY KEY,
     provider VARCHAR(50) NOT NULL DEFAULT 'bailian',
     websocket_url VARCHAR(500) NOT NULL,
-    workspace_id VARCHAR(150) NULL,
     model VARCHAR(150) NOT NULL DEFAULT 'qwen-audio-3.0-asr-flash-streaming',
     api_key TEXT NULL,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
@@ -473,9 +472,6 @@ async function ensureAiColumns(db: Pool) {
   }
 }
 async function ensureSimulationColumns(db: Pool) {
-  if (!(await hasColumn(db, 'realtime_asr_settings', 'workspace_id'))) {
-    await db.query('ALTER TABLE realtime_asr_settings ADD COLUMN workspace_id VARCHAR(150) NULL AFTER websocket_url');
-  }
   if (!(await hasColumn(db, 'simulation_templates', 'module_timeout_mode'))) {
     await db.query("ALTER TABLE simulation_templates ADD COLUMN module_timeout_mode VARCHAR(20) NOT NULL DEFAULT 'warn' AFTER total_seconds");
   }
@@ -702,9 +698,8 @@ async function initializeDatabase(db: Pool) {
   });
   const [realtimeRows] = await db.query<RowDataPacket[]>('SELECT COUNT(*) AS count FROM realtime_asr_settings');
   if (Number(realtimeRows[0].count) === 0) {
-    await db.query('INSERT INTO realtime_asr_settings (id, provider, websocket_url, workspace_id, model, api_key) VALUES (1, ?, ?, ?, ?, ?)', [
+    await db.query('INSERT INTO realtime_asr_settings (id, provider, websocket_url, model, api_key) VALUES (1, ?, ?, ?, ?)', [
       'bailian', process.env.DASHSCOPE_REALTIME_ASR_URL || 'wss://dashscope.aliyuncs.com/api-ws/v1/inference/',
-      process.env.DASHSCOPE_WORKSPACE_ID || null,
       process.env.DASHSCOPE_REALTIME_ASR_MODEL || 'qwen-audio-3.0-asr-flash-streaming', process.env.DASHSCOPE_API_KEY || process.env.BAILIAN_API_KEY || null,
     ]);
   }

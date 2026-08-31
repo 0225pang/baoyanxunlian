@@ -52,7 +52,7 @@ async function realtimeQuota(userId) {
 }
 async function getSettings() {
   const [rows] = await database.query(
-    'SELECT provider, websocket_url AS websocketUrl, workspace_id AS workspaceId, model, api_key AS apiKey FROM realtime_asr_settings WHERE id = 1 LIMIT 1',
+    'SELECT provider, websocket_url AS websocketUrl, model, api_key AS apiKey FROM realtime_asr_settings WHERE id = 1 LIMIT 1',
   );
   const setting = rows[0];
   if (!setting?.websocketUrl || !setting?.model || !setting?.apiKey) throw new Error('管理员尚未完成实时语音识别 API 配置');
@@ -154,9 +154,7 @@ server.on('connection', (client) => {
       const setting = await getSettings(); usageModel = setting.model;
       if (setting.model === 'paraformer-realtime-v1') sampleRate = 16000;
       if (remainingSeconds > 0) quotaTimer = setTimeout(() => { send(client, { type: 'error', error: '实时转写本段已达到本月剩余额度，录音将停止' }); recordUsage(); closeUpstream(true); try { client.close(1008, 'quota reached'); } catch { /* closed */ } }, remainingSeconds * 1000);
-      const headers = { Authorization: `Bearer ${setting.apiKey}` };
-      if (setting.workspaceId) headers['X-DashScope-WorkSpace'] = String(setting.workspaceId);
-      upstream = new WebSocket(setting.websocketUrl, { headers, maxPayload: MAX_MESSAGE_BYTES });
+      upstream = new WebSocket(setting.websocketUrl, { headers: { Authorization: `Bearer ${setting.apiKey}` }, maxPayload: MAX_MESSAGE_BYTES });
       upstream.on('open', () => {
         if (!upstream) return;
         upstream.send(startPayload(taskId, setting, sampleRate));
