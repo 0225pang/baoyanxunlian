@@ -18,10 +18,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       const questionAudioMime = questionAudio instanceof File && questionAudio.size > 0 ? questionAudio.type || 'audio/mpeg' : null;
       await execute('INSERT INTO simulation_answers (session_id, module_index, module_title, question_id, question, answer, transcript, transcript_segments, audio_data, audio_mime, question_audio_data, question_audio_mime, elapsed_seconds, followup_question) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [sessionId, Number(answer.moduleIndex), String(answer.moduleTitle), Number(answer.questionId) || null, String(answer.question), String(answer.answer || '').trim() || null, String(answer.transcript || '').trim() || null, answer.transcriptSegments ? JSON.stringify(answer.transcriptSegments) : null, audioData, audioMime, questionAudioData, questionAudioMime, Math.max(0, Number(answer.elapsedSeconds) || 0), String(answer.followupQuestion || '').trim() || null]);
     }
-    const audio = form.get('fullAudio'); let audioData: Buffer | null = null; let audioMime: string | null = null;
-    if (audio instanceof File && audio.size > 0) { if (audio.size > 100 * 1024 * 1024) return Response.json({ error: '全程录音不能超过 100MB' }, { status: 400 }); audioData = Buffer.from(await audio.arrayBuffer()); audioMime = audio.type || 'audio/webm'; }
     const transcript = String(form.get('transcript') || '').trim() || null;
-    await execute('UPDATE simulation_sessions SET status = ?, elapsed_seconds = ?, full_audio_data = ?, full_audio_mime = ?, transcript = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?', ['completed', elapsedSeconds, audioData, audioMime, transcript, sessionId]);
+    await execute('UPDATE simulation_sessions SET status = ?, elapsed_seconds = ?, transcript = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?', ['completed', elapsedSeconds, transcript, sessionId]);
     return Response.json({ ok: true });
   } catch (error) { return apiError(error); }
 }

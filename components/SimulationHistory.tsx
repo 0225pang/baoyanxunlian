@@ -30,34 +30,6 @@ function AnswerCard({ answer, sessionId }: { answer: SimulationAnswer; sessionId
 export default function SimulationHistory({ onBack, initialRecordId, onInitialRecordOpened }: { onBack: () => void; initialRecordId?: number | null; onInitialRecordOpened?: () => void }) {
   const [records, setRecords] = useState<SimulationRecord[]>([]); const [filter, setFilter] = useState(''); const [selected, setSelected] = useState<SimulationRecord | null>(null); const [detail, setDetail] = useState<Detail | null>(null);
   const [evaluations, setEvaluations] = useState<Evaluation[]>([]); const [messages, setMessages] = useState<ChatMessage[]>([]); const [message, setMessage] = useState(''); const [generating, setGenerating] = useState(false); const [chatOpen, setChatOpen] = useState(false); const [chatInput, setChatInput] = useState(''); const [chatLoading, setChatLoading] = useState(false);
-  useEffect(() => {
-    const isFullAudio = (target: EventTarget | null): target is HTMLAudioElement => target instanceof HTMLAudioElement && target.classList.contains('simulation-full-audio');
-    const stopTransfer = (event: Event) => {
-      if (!isFullAudio(event.target) || event.target.ended || !event.target.getAttribute('src')) return;
-      // Native media controls keep downloading after pause. Remove the source
-      // so the browser aborts the in-flight request rather than reading the
-      // rest of this LONGBLOB from the application/MySQL path.
-      event.target.dataset.resumeSrc = event.target.currentSrc || event.target.src;
-      event.target.removeAttribute('src');
-      event.target.load();
-    };
-    const resumeTransfer = (event: PointerEvent) => {
-      const target = event.target;
-      if (!(target instanceof Element)) return;
-      const audio = target.closest('audio.simulation-full-audio');
-      if (!(audio instanceof HTMLAudioElement) || audio.getAttribute('src') || !audio.dataset.resumeSrc) return;
-      event.preventDefault();
-      audio.src = audio.dataset.resumeSrc;
-      audio.load();
-      void audio.play().catch(() => undefined);
-    };
-    document.addEventListener('pause', stopTransfer, true);
-    document.addEventListener('pointerdown', resumeTransfer, true);
-    return () => {
-      document.removeEventListener('pause', stopTransfer, true);
-      document.removeEventListener('pointerdown', resumeTransfer, true);
-    };
-  }, []);
   const loadRecords = useCallback(async () => { try { const data = await requestJson('/api/simulation-records'); setRecords((data.records || []).map((record: SimulationRecord) => ({ ...record, username: learnerLabel(record.displayName, record.username) }))); } catch (error) { setMessage((error as Error).message); } }, []);
   const loadReview = useCallback(async (sessionId: number) => { const data = await requestJson('/api/ai/simulation-evaluations?sessionId=' + sessionId); setEvaluations(data.evaluations || []); setMessages((data.messages || []).map((item: ChatMessage) => ({ id: Number(item.id), role: item.role, content: item.content }))); }, []);
   const pollReview = useCallback(async (sessionId: number) => requestJson('/api/ai/simulation-evaluations?sessionId=' + sessionId + '&poll=1'), []);

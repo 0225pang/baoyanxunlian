@@ -132,7 +132,6 @@ type SimulationRecord = {
   username?: string;
   displayName?: string;
   answerCount?: number;
-  hasFullAudio?: number;
 };
 const cardColors = ["coral", "blue", "green"];
 
@@ -1173,7 +1172,6 @@ function Simulation({
     Array<{ question: string; answer: string }>
   >([]);
   const [questionAudioBlobs, setQuestionAudioBlobs] = useState<Record<string, Blob>>({});
-  const [fullAudio, setFullAudio] = useState<Blob | null>(null);
   const [autoRecord, setAutoRecord] = useState(true);
   const [readQuestion, setReadQuestion] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
@@ -1188,11 +1186,6 @@ function Simulation({
   const recorder = useRef<MediaRecorder | null>(null);
   const chunks = useRef<Blob[]>([]);
   const stream = useRef<MediaStream | null>(null);
-  const fullRecorder = useRef<MediaRecorder | null>(null);
-  const fullChunks = useRef<Blob[]>([]);
-  const fullAudioRef = useRef<Blob | null>(null);
-  const fullAudioReady = useRef<Promise<Blob | null> | null>(null);
-  const fullRecordingStartedAt = useRef(0);
   const finishedRef = useRef(false);
   // State updates are asynchronous.  This ref prevents a just-cleared follow-up
   // from scheduling another countdown while the final submission is in flight.
@@ -1284,8 +1277,6 @@ function Simulation({
       questionPromptAudio.current?.pause();
       questionPromptAudio.current = null;
       if (recorder.current?.state === "recording") recorder.current.stop();
-      if (fullRecorder.current?.state === "recording")
-        fullRecorder.current.stop();
       stream.current?.getTracks().forEach((track) => track.stop());
       stopRealtimeTranscription(true);
     },
@@ -1434,44 +1425,6 @@ function Simulation({
     stepIndex,
     steps,
   ]);
-  async function startFullRecording() {
-    try {
-      const media = await navigator.mediaDevices.getUserMedia({ audio: true });
-      stream.current = media;
-      fullChunks.current = [];
-      const value = new MediaRecorder(media);
-      value.ondataavailable = (event) => {
-        if (event.data.size) fullChunks.current.push(event.data);
-      };
-      value.onstop = () => {
-        const rawBlob = new Blob(fullChunks.current, {
-          type: value.mimeType || "audio/webm",
-        });
-        const elapsed = Math.max(0, Date.now() - fullRecordingStartedAt.current);
-        const ready = elapsed > 0
-          ? fixWebmDuration(rawBlob, elapsed, { logger: false }).catch(() => rawBlob)
-          : Promise.resolve(rawBlob);
-        fullAudioReady.current = ready;
-        void ready.then((blob) => {
-          fullAudioRef.current = blob;
-          setFullAudio(blob);
-          return blob;
-        });
-      };
-      fullRecorder.current = value;
-      fullRecordingStartedAt.current = Date.now();
-      // A timesliced MediaRecorder output is a fragmented WebM. Some browsers
-      // expose only its first fragment as seekable, which made a 15-minute
-      // session look like a 15-second audio file in review. Emit one complete
-      // container when recording stops; fixWebmDuration then writes its full
-      // duration metadata before upload.
-      value.start();
-    } catch {
-      setMessage(
-        "完整录音未开启：请允许浏览器使用麦克风。仍可继续用文字完成模拟。",
-      );
-    }
-  }
   function stopRealtimeTranscription(dispose = false) {
     if (dispose) realtimeRun.current += 1;
     const processor = realtimeProcessor.current;
@@ -1717,10 +1670,6 @@ function Simulation({
       setFollowup(null);
       setFollowupGenerating(false);
       setSegmentBlob(null);
-      setFullAudio(null);
-      fullAudioRef.current = null;
-      fullAudioReady.current = null;
-      fullRecordingStartedAt.current = 0;
       finishedRef.current = false;
       submissionRef.current = false;
       moduleTimeoutRef.current = "";
@@ -1730,7 +1679,6 @@ function Simulation({
       setSubmitting(false);
       setCompletedSessionId(null);
       setCountdown(firstDynamic ? null : 3);
-      await startFullRecording();
       if (firstDynamic)
         void generateDynamicQuestion(0, [], data.sessionId, data.steps);
     } catch (error) {
@@ -1876,23 +1824,6 @@ function Simulation({
     if (!value || value.state !== "recording") return segmentBlob;
     return new Promise<Blob | null>((resolve) => {
       segmentStopResolver.current = resolve;
-      value.stop();
-    });
-  }
-  async function stopFullRecording() {
-    const value = fullRecorder.current;
-    if (!value || value.state !== "recording")
-      return fullAudioReady.current
-        ? await fullAudioReady.current
-        : fullAudioRef.current;
-    return new Promise<Blob | null>((resolve) => {
-      value.addEventListener("stop", () => {
-        const ready = fullAudioReady.current;
-        if (ready) void ready.then(resolve);
-        else resolve(fullAudioRef.current);
-      }, {
-        once: true,
-      });
       value.stop();
     });
   }
@@ -2046,7 +1977,6 @@ function Simulation({
     stopQuestionReading();
     if (recorder.current?.state === "recording") await stopRecording();
     else stopRealtimeTranscription(true);
-    if (fullRecorder.current?.state === "recording") await stopFullRecording();
     stream.current?.getTracks().forEach((track) => track.stop());
     if (sessionId && !finishedRef.current) {
       try {
@@ -2090,15 +2020,6 @@ function Simulation({
             }),
           );
       });
-      const whole =
-        (await stopFullRecording()) || fullAudio || fullAudioRef.current;
-      if (whole)
-        form.set(
-          "fullAudio",
-          new File([whole], "simulation.webm", {
-            type: whole.type || "audio/webm",
-          }),
-        );
       await jsonFetch("/api/simulations/" + sessionId, {
         method: "POST",
         body: form,
@@ -2611,12 +2532,6 @@ function LegacySimulationHistory({ onBack }: { onBack: () => void }) {
               {formatRecordDate(detail.session.startedAt)} · 用时{" "}
               {Math.floor(detail.session.elapsedSeconds / 60)} 分钟
             </p>
-            {detail.session.hasFullAudio ? (
-              <AudioWithDuration
-                src={"/api/simulation-records/" + detail.session.id + "/audio"}
-                className="simulation-full-audio"
-              />
-            ) : null}
           </div>
           <div className="simulation-review-actions">
             <button
