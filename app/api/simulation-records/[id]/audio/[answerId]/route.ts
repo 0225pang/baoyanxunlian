@@ -1,4 +1,5 @@
 import { apiError, requireUser } from '@/lib/auth';
+import { AudioBlobReadBusyError, withAudioBlobRead } from '@/lib/audio-blob-queue';
 import { query } from '@/lib/db';
 import type { RowDataPacket } from 'mysql2/promise';
 
@@ -9,7 +10,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     // and selecting the unused question audio roughly doubles database reads.
     const dataColumn = kind === 'question' ? 'question_audio_data' : 'audio_data';
     const mimeColumn = kind === 'question' ? 'question_audio_mime' : 'audio_mime';
-    const rows = await query<RowDataPacket[]>(`SELECT a.${dataColumn} AS audioData, a.${mimeColumn} AS audioMime, s.user_id AS userId FROM simulation_answers a JOIN simulation_sessions s ON s.id=a.session_id WHERE a.id=? AND a.session_id=? LIMIT 1`, [answerId, sessionId]);
+    const rows = await withAudioBlobRead(() => query<RowDataPacket[]>(`SELECT a.${dataColumn} AS audioData, a.${mimeColumn} AS audioMime, s.user_id AS userId FROM simulation_answers a JOIN simulation_sessions s ON s.id=a.session_id WHERE a.id=? AND a.session_id=? LIMIT 1`, [answerId, sessionId]));
     const row = rows[0]; const audioData = row?.audioData; const audioMime = row?.audioMime;
     if (!row || (user.role !== 'admin' && Number(row.userId) !== user.id) || !audioData) return Response.json({ error: '音频不存在或无权访问' }, { status: 404 });
     const buffer = audioData as Buffer;
@@ -26,7 +27,10 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || start > end || start >= size) return new Response(null, { status: 416, headers: { ...commonHeaders, 'Content-Range': `bytes */${size}` } });
     const chunk = buffer.subarray(start, end + 1);
     return new Response(chunk as unknown as BodyInit, { status: 206, headers: { ...commonHeaders, 'Content-Length': String(chunk.length), 'Content-Range': `bytes ${start}-${end}/${size}` } });
-  } catch (error) { return apiError(error); }
+  } catch (error) {
+    if (error instanceof AudioBlobReadBusyError) return Response.json({ error: error.message }, { status: 503, headers: { 'Retry-After': '3' } });
+    return apiError(error);
+  }
 }
 
 export async function HEAD(request: Request, context: { params: Promise<{ id: string; answerId: string }> }) {

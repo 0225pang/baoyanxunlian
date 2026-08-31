@@ -15,7 +15,7 @@ export const runtime = 'nodejs';
 
 type RecordRow = RowDataPacket & {
   user_id: number;
-  audio_data: Buffer | null;
+  has_audio: number;
   transcript: string | null;
   transcript_status: string;
 };
@@ -125,14 +125,14 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     if (!Number.isInteger(id) || id <= 0) return Response.json({ error: '记录编号无效' }, { status: 400 });
 
     const rows = await query<RecordRow[]>(
-      'SELECT user_id, audio_data, transcript, transcript_status FROM practice_records WHERE id = ? LIMIT 1',
+      'SELECT user_id, audio_data IS NOT NULL AS has_audio, transcript, transcript_status FROM practice_records WHERE id = ? LIMIT 1',
       [id],
     );
     const row = rows[0];
     if (!row || (row.user_id !== user.id && user.role !== 'admin')) {
       return Response.json({ error: '记录不存在或无权访问' }, { status: 404 });
     }
-    if (!row.audio_data) return Response.json({ error: '这条记录没有录音' }, { status: 400 });
+    if (!row.has_audio) return Response.json({ error: '这条记录没有录音' }, { status: 400 });
 
     const config = await getAsrConfig();
     if (!config.key) return Response.json({ error: '尚未配置百炼 DASHSCOPE_API_KEY' }, { status: 503 });

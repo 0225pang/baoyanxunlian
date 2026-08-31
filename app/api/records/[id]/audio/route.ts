@@ -1,11 +1,12 @@
 import { apiError, requireUser } from '@/lib/auth';
+import { AudioBlobReadBusyError, withAudioBlobRead } from '@/lib/audio-blob-queue';
 import { query } from '@/lib/db';
 
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const user = await requireUser();
     const { id } = await context.params;
-    const rows = await query('SELECT user_id, audio_data, audio_mime FROM practice_records WHERE id = ?', [Number(id)]);
+    const rows = await withAudioBlobRead(() => query('SELECT user_id, audio_data, audio_mime FROM practice_records WHERE id = ?', [Number(id)]));
     const row = rows[0] as { user_id: number; audio_data: Buffer | null; audio_mime: string | null } | undefined;
     if (!row?.audio_data || (row.user_id !== user.id && user.role !== 'admin')) return new Response('Not found', { status: 404 });
 
@@ -29,7 +30,10 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || start > end || start >= size) return new Response(null, { status: 416, headers: { ...commonHeaders, 'Content-Range': `bytes */${size}` } });
     const chunk = buffer.subarray(start, end + 1);
     return new Response(chunk as unknown as BodyInit, { status: 206, headers: { ...commonHeaders, 'Content-Length': String(chunk.length), 'Content-Range': `bytes ${start}-${end}/${size}` } });
-  } catch (error) { return apiError(error); }
+  } catch (error) {
+    if (error instanceof AudioBlobReadBusyError) return Response.json({ error: error.message }, { status: 503, headers: { 'Retry-After': '3' } });
+    return apiError(error);
+  }
 }
 
 

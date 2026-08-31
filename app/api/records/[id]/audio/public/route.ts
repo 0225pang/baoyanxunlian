@@ -1,4 +1,5 @@
 import { query } from '@/lib/db';
+import { AudioBlobReadBusyError, withAudioBlobRead } from '@/lib/audio-blob-queue';
 import { getAsrConfig, verifyAudioToken } from '@/lib/asr';
 import type { RowDataPacket } from 'mysql2/promise';
 
@@ -20,7 +21,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
       return new Response('Not found', { status: 404 });
     }
 
-    const rows = await query<AudioRow[]>('SELECT audio_data, audio_mime FROM practice_records WHERE id = ? LIMIT 1', [id]);
+    const rows = await withAudioBlobRead(() => query<AudioRow[]>('SELECT audio_data, audio_mime FROM practice_records WHERE id = ? LIMIT 1', [id]));
     const row = rows[0];
     if (!row?.audio_data) return new Response('Not found', { status: 404 });
 
@@ -32,7 +33,8 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
         'X-Robots-Tag': 'noindex, nofollow',
       },
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof AudioBlobReadBusyError) return new Response(error.message, { status: 503, headers: { 'Retry-After': '3' } });
     return new Response('Not found', { status: 404 });
   }
 }
