@@ -9,6 +9,7 @@ type ModelRow = RowDataPacket & {
   baseUrl: string;
   model: string;
   apiKey: string | null;
+  enabled: number;
 };
 type PromptRow = RowDataPacket & { id: number; name: string; content: string };
 type AsrRow = RowDataPacket & {
@@ -29,6 +30,7 @@ function modelToClient(row: ModelRow) {
     provider: row.provider,
     baseUrl: row.baseUrl,
     model: row.model,
+    enabled: Boolean(row.enabled),
     apiKeySet: Boolean(key),
     apiKeyPreview: key ? key.slice(0, 4) + '••••••••' + key.slice(-4) : '',
   };
@@ -49,6 +51,7 @@ function asrToClient(row: AsrRow) {
     submitUrl: row.submitUrl,
     taskUrl: row.taskUrl,
     model: row.model,
+    enabled: Boolean(row.enabled),
     publicBaseUrl: row.publicBaseUrl || '',
     apiKeySet: Boolean(row.apiKey),
     apiKeyPreview: secretPreview(row.apiKey),
@@ -65,10 +68,10 @@ async function requireAdmin() {
 
 async function readState() {
   const settings = await query<RowDataPacket[]>('SELECT active_config_id AS activeConfigId, active_prompt_id AS activePromptId, auto_transcribe AS autoTranscribe FROM ai_settings WHERE id = 1 LIMIT 1');
-  const configs = await query<ModelRow[]>('SELECT id, name, provider, base_url AS baseUrl, model, api_key AS apiKey FROM ai_model_configs ORDER BY id ASC');
+  const configs = await query<ModelRow[]>('SELECT id, name, provider, base_url AS baseUrl, model, api_key AS apiKey, enabled FROM ai_model_configs ORDER BY id ASC');
   const prompts = await query<PromptRow[]>('SELECT id, name, content FROM ai_prompts ORDER BY id ASC');
   const asrRows = await query<AsrRow[]>('SELECT provider, submit_url AS submitUrl, task_url AS taskUrl, model, api_key AS apiKey, public_base_url AS publicBaseUrl, token_secret AS tokenSecret FROM asr_settings WHERE id = 1 LIMIT 1');
-  const activeConfigId = Number(settings[0]?.activeConfigId || configs[0]?.id || 0);
+  const activeConfigId = Number(settings[0]?.activeConfigId || configs.find((item) => Boolean(item.enabled))?.id || 0);
   const activePromptId = Number(settings[0]?.activePromptId || prompts[0]?.id || 0);
   return {
     configs: configs.map(modelToClient),
@@ -94,10 +97,12 @@ export async function PATCH(request: Request) {
       activeConfigId?: number;
       activePromptId?: number;
       autoTranscribe?: boolean;
-      config?: { id?: number; name?: string; provider?: string; baseUrl?: string; model?: string; apiKey?: string };
+      config?: { id?: number; name?: string; provider?: string; baseUrl?: string; model?: string; apiKey?: string; enabled?: boolean };
       prompt?: { id?: number; name?: string; content?: string };
       asrConfig?: { provider?: string; submitUrl?: string; taskUrl?: string; model?: string; apiKey?: string; publicBaseUrl?: string; tokenSecret?: string };
       deleteConfigId?: number;
+      toggleConfigId?: number;
+      toggleConfigEnabled?: boolean;
       deletePromptId?: number;
     };
 
@@ -105,6 +110,19 @@ export async function PATCH(request: Request) {
       const active = await query<RowDataPacket[]>('SELECT active_config_id AS id FROM ai_settings WHERE id = 1 LIMIT 1');
       if (Number(active[0]?.id) === Number(body.deleteConfigId)) return Response.json({ error: '不能删除当前正在使用的模型配置' }, { status: 400 });
       await execute('DELETE FROM ai_model_configs WHERE id = ?', [Number(body.deleteConfigId)]);
+    }
+    if (body.toggleConfigId) {
+      const id = Number(body.toggleConfigId);
+      if (body.toggleConfigEnabled === false) {
+        const available = await query<RowDataPacket[]>('SELECT id FROM ai_model_configs WHERE enabled=1 AND id<>? ORDER BY id ASC LIMIT 1', [id]);
+        if (!available.length) return Response.json({ error: '至少要保留一个可用模型配置。' }, { status: 400 });
+        await execute('UPDATE ai_model_configs SET enabled=0, updated_at=CURRENT_TIMESTAMP WHERE id=?', [id]);
+        await execute('UPDATE user_settings SET ai_config_id=NULL WHERE ai_config_id=?', [id]);
+        await execute('UPDATE ai_settings SET active_config_id=? WHERE id=1 AND active_config_id=?', [Number(available[0].id), id]);
+      } else {
+        await execute('UPDATE ai_model_configs SET enabled=1, updated_at=CURRENT_TIMESTAMP WHERE id=?', [id]);
+      }
+      return Response.json(await readState());
     }
     if (body.deletePromptId) {
       const active = await query<RowDataPacket[]>('SELECT active_prompt_id AS id FROM ai_settings WHERE id = 1 LIMIT 1');
@@ -122,13 +140,13 @@ export async function PATCH(request: Request) {
       if (!name || !provider || !baseUrl || !model) return Response.json({ error: '模型配置的名称、平台、接口地址和模型名称不能为空' }, { status: 400 });
       if (Number(body.config.id) > 0) {
         if (key) {
-          await execute('UPDATE ai_model_configs SET name = ?, provider = ?, base_url = ?, model = ?, api_key = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [name, provider, baseUrl, model, key, Number(body.config.id)]);
+          await execute('UPDATE ai_model_configs SET name = ?, provider = ?, base_url = ?, model = ?, api_key = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [name, provider, baseUrl, model, key, body.config.enabled === false ? 0 : 1, Number(body.config.id)]);
         } else {
-          await execute('UPDATE ai_model_configs SET name = ?, provider = ?, base_url = ?, model = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [name, provider, baseUrl, model, Number(body.config.id)]);
+          await execute('UPDATE ai_model_configs SET name = ?, provider = ?, base_url = ?, model = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [name, provider, baseUrl, model, body.config.enabled === false ? 0 : 1, Number(body.config.id)]);
         }
         configId = Number(body.config.id);
       } else {
-        const result = await execute('INSERT INTO ai_model_configs (name, provider, base_url, model, api_key) VALUES (?, ?, ?, ?, ?)', [name, provider, baseUrl, model, key || null]);
+        const result = await execute('INSERT INTO ai_model_configs (name, provider, base_url, model, api_key, enabled) VALUES (?, ?, ?, ?, ?, ?)', [name, provider, baseUrl, model, key || null, body.config.enabled === false ? 0 : 1]);
         configId = Number(result.insertId);
       }
     }
@@ -170,7 +188,7 @@ export async function PATCH(request: Request) {
     const state = await readState();
     configId = configId || state.activeConfigId;
     promptId = promptId || state.activePromptId;
-    const selectedConfig = state.configs.find((item) => item.id === configId);
+    const selectedConfig = state.configs.find((item) => item.id === configId && item.enabled);
     const selectedPrompt = state.prompts.find((item) => item.id === promptId);
     if (!selectedConfig || !selectedPrompt) return Response.json({ error: '请选择有效的模型配置和提示词' }, { status: 400 });
     const selectedKeyRows = await query<RowDataPacket[]>('SELECT api_key AS apiKey FROM ai_model_configs WHERE id = ? LIMIT 1', [configId]);

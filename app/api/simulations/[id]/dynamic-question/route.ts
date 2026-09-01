@@ -1,6 +1,6 @@
 import { apiError, requireUser } from '@/lib/auth';
 import { query } from '@/lib/db';
-import { aiRequestError, chatCompletionsUrl, extractChatContent, getActiveAiConfig, safeJsonParse, samplingParameters } from '@/lib/ai';
+import { aiRequestErrorWithFallback, chatCompletionsUrl, extractChatContent, getActiveAiConfig, safeJsonParse, samplingParameters } from '@/lib/ai';
 import { assertApiAccess, logApiUsage, readTokenUsage } from '@/lib/usage';
 import { synthesizeConfiguredQuestionVoice } from '@/lib/question-voices';
 import type { RowDataPacket } from 'mysql2/promise';
@@ -35,7 +35,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
 
     const contextText = answerContext(Array.isArray(body.priorAnswers) ? body.priorAnswers : []);
     if (!contextText) return Response.json({ error: '请先完成至少一个前序环节，再进入自由交流。' }, { status: 400 });
-    const config = await getActiveAiConfig();
+    const config = await getActiveAiConfig(Number(session.userId));
     if (!config?.apiKey) return Response.json({ error: '请先在管理后台配置 AI 模型' }, { status: 503 });
     await assertApiAccess(Number(session.userId), 'ai');
 
@@ -53,7 +53,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       }),
     });
     const raw = await response.text();
-    if (!response.ok) return Response.json({ error: aiRequestError(response.status, raw) }, { status: 502 });
+    if (!response.ok) return Response.json({ error: await aiRequestErrorWithFallback(config, response.status, raw) }, { status: 502 });
     const payload = safeJsonParse(raw); const question = extractChatContent(payload);
     if (!question) return Response.json({ error: '未生成有效问题' }, { status: 502 });
     const usage = readTokenUsage(payload);

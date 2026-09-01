@@ -290,6 +290,7 @@ footer>span:first-child{color:var(--ink);font-weight:700}
 .ai-config-list,.ai-prompt-list{display:grid;gap:8px;margin-top:15px}
 .ai-config-card,.ai-prompt-card{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 13px;border:1px solid #e2e9e3;border-radius:5px;background:#fff}
 .ai-config-card.active,.ai-prompt-card.active{border-color:#a9d0b6;box-shadow:0 0 0 2px #e6f3e9}
+.ai-config-card.disabled{border-style:dashed;background:#fafafa;opacity:.68}.ai-config-card.disabled strong:after{content:' · 已禁用';color:#a2604a;font-size:10px}
 .ai-config-card>div:first-child,.ai-prompt-card>div:first-child{min-width:0;display:grid;gap:4px}
 .ai-config-card strong,.ai-prompt-card strong{font-size:12px;color:#3e6357}
 .ai-config-card span,.ai-prompt-card p{overflow:hidden;margin:0;color:#83918b;font-size:11px;line-height:1.5;text-overflow:ellipsis;white-space:nowrap}
@@ -435,3 +436,6 @@ footer>span:first-child{color:var(--ink);font-weight:700}
 .settings-voice-item>span small{overflow:hidden;color:#7b9085;font-size:10px;font-weight:500;text-overflow:ellipsis;white-space:nowrap}
 .settings-voice-item audio{width:min(245px,50%);height:32px}
 @media(max-width:650px){.read-question-setting{grid-template-columns:minmax(0,1fr) auto}.settings-voice-list{grid-template-columns:1fr}.settings-voice-item{align-items:flex-start;flex-direction:column}.settings-voice-item audio{width:100%}}
+
+/* User-facing AI model choices: names only, with clear selected/default states. */
+.ai-model-setting{display:block;margin-top:16px}.ai-model-setting-head p{max-width:680px;margin:6px 0 0;line-height:1.7}.user-model-picker{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin-top:18px}.user-model-picker button{display:grid;min-height:76px;gap:5px;padding:14px 15px;border:1px solid #dce8df;border-radius:12px;background:#fbfdfb;color:#315d4d;text-align:left;cursor:pointer;transition:border-color .18s ease,background .18s ease,transform .18s ease,box-shadow .18s ease}.user-model-picker button:hover:not(:disabled){border-color:#83ba94;background:#f2fbf4;transform:translateY(-1px);box-shadow:0 7px 16px #24523712}.user-model-picker button.selected{border-color:#4d9470;background:linear-gradient(135deg,#e5f7eb,#f8fff9);box-shadow:0 0 0 3px #d8f0df}.user-model-picker button:focus-visible{outline:3px solid #ef9a7d;outline-offset:2px}.user-model-picker button:disabled{opacity:.55;cursor:wait}.user-model-picker strong{font-size:14px}.user-model-picker small{color:#6f887c;font-size:11px;font-weight:600}.user-model-picker .selected small:before{content:'已选择 · ';color:#347957}@media(prefers-reduced-motion:reduce){.user-model-picker button{transition:none}}@media(max-width:650px){.user-model-picker{grid-template-columns:1fr}.user-model-picker button{min-height:68px}}

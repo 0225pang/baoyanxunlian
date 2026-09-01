@@ -50,33 +50,41 @@ export async function POST(request: Request) {
       try { const publicUrl = provider === 'bailian' ? sourcePublicUrl(settings, id, token) : undefined; const cloned = provider === 'baidu' ? await createBaiduClonedVoice(settings, name, buffer, { description, language }) : await createClonedVoice(settings, `${prefix}${id}`, publicUrl!, model || settings.cloneTargetModel); await execute('UPDATE question_voices SET status=?,voice_id=?,error=NULL WHERE id=?', ['ready', cloned.voiceId, id]); return Response.json({ id, voiceId: cloned.voiceId, publicUrl, state: await readState() }, { status: 201 }); }
       catch (error) { await execute('UPDATE question_voices SET status=?,error=? WHERE id=?', ['failed', error instanceof Error ? error.message.slice(0, 3000) : '声音复刻失败', id]); throw error; }
     }
-    const body = await request.json() as { action?: string; id?: number; questionId?: number; name?: string; text?: string; provider?: string; model?: string; voiceId?: string; parameters?: Record<string, unknown> };
+    const body = await request.json() as { action?: string; id?: number; sourceVoiceId?: number; questionId?: number; name?: string; text?: string; provider?: string; model?: string; voiceId?: string; parameters?: Record<string, unknown> };
     if (body.action === 'retry-clone') {
       const id = Number(body.id); if (!Number.isInteger(id) || id < 1) return Response.json({ error: '复刻音色记录无效。' }, { status: 400 }); const rows = await query<RowDataPacket[]>('SELECT id,kind,name,provider,source_path AS sourcePath,public_token AS publicToken,model FROM question_voices WHERE id=? LIMIT 1', [id]); const voice = rows[0]; if (!voice || String(voice.kind) !== 'custom' || !voice.sourcePath) return Response.json({ error: '找不到可重试的声音样本。' }, { status: 404 });
       const settings = await getTtsSettings(); await execute('UPDATE question_voices SET status=?,error=NULL WHERE id=?', ['processing', id]);
       try { const isBaidu = String(voice.provider) === 'baidu'; const source = isBaidu ? await readQuestionVoiceFile(String(voice.sourcePath)) : null; if (isBaidu && !source) throw new Error('找不到百度复刻所需的本地声音样本。'); const cloned = isBaidu ? await createBaiduClonedVoice(settings, String(voice.name), source!) : await createClonedVoice(settings, `fishvoice${id}`, sourcePublicUrl(settings, id, String(voice.publicToken)), String(voice.model || settings.cloneTargetModel)); await execute('UPDATE question_voices SET status=?,voice_id=?,error=NULL WHERE id=?', ['ready', cloned.voiceId, id]); return Response.json({ id, voiceId: cloned.voiceId, state: await readState() }); }
       catch (error) { await execute('UPDATE question_voices SET status=?,error=? WHERE id=?', ['failed', error instanceof Error ? error.message.slice(0, 3000) : '声音复刻失败', id]); throw error; }
     }
-    const action = String(body.action);
+    // Reuse the ordinary synthesis path, but obtain provider/model/parameters
+    // from an administrator-created settings-preview voice.
+    const requestedAction = String(body.action);
+    const action = requestedAction === 'synthesize-from-settings-preview' ? 'synthesize' : requestedAction;
     if (!['synthesize', 'synthesize-translation-prompt', 'synthesize-settings-preview'].includes(action)) return Response.json({ error: '不支持的语音操作。' }, { status: 400 });
     const isTranslationPrompt = action === 'synthesize-translation-prompt';
     const isSettingsPreview = action === 'synthesize-settings-preview';
+    const fromSettingsPreview = requestedAction === 'synthesize-from-settings-preview';
     const isGlobalPreview = isTranslationPrompt || isSettingsPreview;
     const previewKind = isTranslationPrompt ? 'translation_prompt' : 'settings_preview';
-    const provider = body.provider === 'baidu' ? 'baidu' : 'bailian';
+    const sourceRows = fromSettingsPreview ? await query<RowDataPacket[]>(`SELECT name,provider,model,voice_id AS voiceId,parameters FROM question_voices WHERE id=? AND kind='settings_preview' AND status='ready' AND output_path IS NOT NULL LIMIT 1`, [Number(body.sourceVoiceId)]) : [];
+    const source = sourceRows[0];
+    if (fromSettingsPreview && !source) return Response.json({ error: '找不到可用的设置朗读音色，请先在题目语音管理中生成试听音频。' }, { status: 404 });
+    const provider = fromSettingsPreview ? (String(source.provider) === 'baidu' ? 'baidu' : 'bailian') : body.provider === 'baidu' ? 'baidu' : 'bailian';
     const questionId = Number(body.questionId);
     const defaultName = isTranslationPrompt ? '文献翻译提示音' : isSettingsPreview ? '设置声音试听' : '生成语音';
-    const name = clean(body.name, 160) || defaultName;
+    const name = fromSettingsPreview ? clean(source.name, 160) : clean(body.name, 160) || defaultName;
     const settings = await getTtsSettings();
-    const model = provider === 'baidu' ? clean(body.model || 'baidu-duxiaoyu', 150) : clean(body.model || settings.defaultModel, 150);
-    const voiceId = provider === 'baidu' ? clean(body.voiceId, 255) : model.startsWith('sambert-') ? '' : clean(body.voiceId, 255);
+    const model = fromSettingsPreview ? clean(source.model, 150) : provider === 'baidu' ? clean(body.model || 'baidu-duxiaoyu', 150) : clean(body.model || settings.defaultModel, 150);
+    const voiceId = fromSettingsPreview ? clean(source.voiceId, 255) : provider === 'baidu' ? clean(body.voiceId, 255) : model.startsWith('sambert-') ? '' : clean(body.voiceId, 255);
     if ((!isGlobalPreview && (!Number.isInteger(questionId) || questionId < 1)) || (provider === 'bailian' && !model.startsWith('sambert-') && !voiceId)) return Response.json({ error: isGlobalPreview ? (model.startsWith('sambert-') ? '请选择有效的 Sambert 模型。' : '请选择要使用的复刻 voice ID。') : provider === 'baidu' ? '请选择有效题目。' : model.startsWith('sambert-') ? '请选择有效的 Sambert 模型。' : '请选择要使用的复刻 voice ID。' }, { status: 400 });
     const text = clean(body.text, 1000);
     const questions = isGlobalPreview ? [] : await query<RowDataPacket[]>('SELECT content FROM questions WHERE id=? LIMIT 1', [questionId]);
     const question = questions[0];
     if (!isGlobalPreview && !question) return Response.json({ error: '所选题目不存在。' }, { status: 404 });
     if (isGlobalPreview && !text) return Response.json({ error: isTranslationPrompt ? '文献翻译提示语不能为空。' : '试听文本不能为空。' }, { status: 400 });
-    const parameters = body.parameters && typeof body.parameters === 'object' ? body.parameters : {};
+    const parameters = fromSettingsPreview ? parseParameters(source.parameters) : body.parameters && typeof body.parameters === 'object' ? body.parameters : {};
+    if (fromSettingsPreview) delete (parameters as Record<string, unknown>).text;
     const existing = await query<RowDataPacket[]>(isGlobalPreview ? "SELECT id FROM question_voices WHERE question_id IS NULL AND provider=? AND name=? AND kind=? AND status='ready' LIMIT 1" : "SELECT id FROM question_voices WHERE question_id=? AND provider=? AND name=? AND kind='generated' AND status='ready' LIMIT 1", isGlobalPreview ? [provider, name, previewKind] : [questionId, provider, name]);
     if (existing[0]) return Response.json({ id: Number(existing[0].id), skipped: true, state: await readState() });
     const kind = isGlobalPreview ? previewKind : 'generated';

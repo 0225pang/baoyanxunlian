@@ -244,6 +244,7 @@ export default function Home() {
   const recordingStartedAt = useRef<number | null>(null);
   const speechRunId = useRef(0);
   const questionAudio = useRef<HTMLAudioElement | null>(null);
+  const questionReadingWatchdog = useRef<number | null>(null);
   const audioContext = useRef<AudioContext | null>(null);
 
   useEffect(() => {
@@ -387,19 +388,46 @@ export default function Home() {
           const finishReading = () => {
             if (completed || speechRunId.current !== runId) return;
             completed = true;
+            if (questionReadingWatchdog.current !== null) {
+              window.clearTimeout(questionReadingWatchdog.current);
+              questionReadingWatchdog.current = null;
+            }
             if (autoRecord) void startRecording();
+          };
+          const armWatchdog = (milliseconds: number, reason: string) => {
+            if (questionReadingWatchdog.current !== null) window.clearTimeout(questionReadingWatchdog.current);
+            questionReadingWatchdog.current = window.setTimeout(() => {
+              if (speechRunId.current !== runId || completed) return;
+              window.speechSynthesis?.cancel();
+              questionAudio.current?.pause();
+              setMessage(reason);
+              finishReading();
+            }, milliseconds);
           };
           const browserFallback = () => {
             if (question.suppressBrowserRead) { finishReading(); return; }
             if (!("speechSynthesis" in window)) { setMessage("当前浏览器不支持题目朗读"); finishReading(); return; }
+            // Safari on iPad/iPhone may silently discard speech started after a
+            // countdown (it is no longer a direct user gesture), and then never
+            // emits either `end` or `error`. Never let that block answering.
+            const appleTouchDevice = /iPad|iPhone|iPod/i.test(navigator.userAgent) ||
+              (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+            if (appleTouchDevice) {
+              setMessage("当前设备未能启动浏览器朗读，已跳过朗读并开始作答。");
+              finishReading();
+              return;
+            }
             window.speechSynthesis.cancel();
             const utterance = new SpeechSynthesisUtterance(question.content);
             utterance.lang = /[\u4e00-\u9fff]/.test(question.content) ? "zh-CN" : "en-US";
-            utterance.onend = finishReading; utterance.onerror = finishReading; window.speechSynthesis.speak(utterance);
+            utterance.onend = finishReading; utterance.onerror = finishReading;
+            armWatchdog(Math.min(90_000, Math.max(8_000, question.content.length * 450 + 4_000)), "浏览器朗读未正常结束，已跳过朗读并开始作答。");
+            window.speechSynthesis.speak(utterance);
           };
           if (question.questionVoiceUrl) {
             const audio = new Audio(question.questionVoiceUrl); questionAudio.current = audio;
             audio.onended = finishReading; audio.onerror = browserFallback;
+            armWatchdog(120_000, "题目音频播放超时，已跳过朗读并开始作答。");
             void audio.play().catch(browserFallback);
           } else browserFallback();
         } else if (autoRecord) void startRecording();
@@ -489,6 +517,10 @@ export default function Home() {
 
   function stopMedia() {
     speechRunId.current += 1;
+    if (questionReadingWatchdog.current !== null) {
+      window.clearTimeout(questionReadingWatchdog.current);
+      questionReadingWatchdog.current = null;
+    }
     window.speechSynthesis?.cancel();
     questionAudio.current?.pause();
     questionAudio.current = null;
@@ -1203,6 +1235,7 @@ function Simulation({
   const speechRunId = useRef(0);
   const questionPromptAudio = useRef<HTMLAudioElement | null>(null);
   const questionReadingSafetyTimer = useRef<number | null>(null);
+  const questionPromptWatchdog = useRef<number | null>(null);
   const audioContext = useRef<AudioContext | null>(null);
   const [liveTranscript, setLiveTranscript] = useState("");
   const [realtimeStatus, setRealtimeStatus] = useState("");
@@ -1753,6 +1786,10 @@ function Simulation({
       window.clearTimeout(questionReadingSafetyTimer.current);
       questionReadingSafetyTimer.current = null;
     }
+    if (questionPromptWatchdog.current !== null) {
+      window.clearTimeout(questionPromptWatchdog.current);
+      questionPromptWatchdog.current = null;
+    }
     window.speechSynthesis?.cancel();
     questionPromptAudio.current?.pause();
     questionPromptAudio.current = null;
@@ -1812,6 +1849,10 @@ function Simulation({
           )
             return;
           completed = true;
+          if (questionPromptWatchdog.current !== null) {
+            window.clearTimeout(questionPromptWatchdog.current);
+            questionPromptWatchdog.current = null;
+          }
           setReading(false);
           // Some browser TTS engines emit `end` a little before their final
           // samples leave the speaker.  Keep a tiny, cancellable gap so the
@@ -1827,14 +1868,33 @@ function Simulation({
             }, 250);
           }
         };
+        const armWatchdog = (milliseconds: number, reason: string) => {
+          if (questionPromptWatchdog.current !== null) window.clearTimeout(questionPromptWatchdog.current);
+          questionPromptWatchdog.current = window.setTimeout(() => {
+            if (speechRunId.current !== runId || completed) return;
+            window.speechSynthesis?.cancel();
+            questionPromptAudio.current?.pause();
+            setMessage(reason);
+            finishReading();
+          }, milliseconds);
+        };
         const browserFallback = () => {
           if (submissionRef.current || finishedRef.current) return;
           if (current?.suppressBrowserRead && !followup) { finishReading(); return; }
           if (!("speechSynthesis" in window)) { finishReading(); return; }
+          const appleTouchDevice = /iPad|iPhone|iPod/i.test(navigator.userAgent) ||
+            (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+          if (appleTouchDevice) {
+            setMessage("当前设备未能启动浏览器朗读，已跳过朗读并开始作答。");
+            finishReading();
+            return;
+          }
           window.speechSynthesis.cancel();
           const utterance = new SpeechSynthesisUtterance(text);
           utterance.lang = /[\u4e00-\u9fff]/.test(text) ? "zh-CN" : "en-US";
-          utterance.onend = finishReading; utterance.onerror = finishReading; window.speechSynthesis.speak(utterance);
+          utterance.onend = finishReading; utterance.onerror = finishReading;
+          armWatchdog(Math.min(90_000, Math.max(8_000, text.length * 450 + 4_000)), "浏览器朗读未正常结束，已跳过朗读并开始作答。");
+          window.speechSynthesis.speak(utterance);
         };
         const generatedAudio = questionAudioBlobs[questionAudioKey()];
         const audioUrl = generatedAudio ? URL.createObjectURL(generatedAudio) : current?.questionVoiceUrl;
@@ -1842,6 +1902,7 @@ function Simulation({
           const audio = new Audio(audioUrl); questionPromptAudio.current = audio;
           audio.onended = () => { if (generatedAudio) URL.revokeObjectURL(audioUrl); finishReading(); };
           audio.onerror = () => { if (generatedAudio) URL.revokeObjectURL(audioUrl); browserFallback(); };
+          armWatchdog(120_000, "题目音频播放超时，已跳过朗读并开始作答。");
           void audio.play().catch(browserFallback);
         } else browserFallback();
       } else {
@@ -2829,6 +2890,9 @@ function QuestionBank() {
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importTypeId, setImportTypeId] = useState("");
   const [importing, setImporting] = useState(false);
+  const [importGenerateVoices, setImportGenerateVoices] = useState(false);
+  const [generatingImportedVoices, setGeneratingImportedVoices] = useState(false);
+  const importVoiceCancelRef = useRef(false);
   const [duplicatesOpen, setDuplicatesOpen] = useState(false);
   const [duplicateGroups, setDuplicateGroups] = useState<DuplicateGroup[]>([]);
   const [duplicateSelected, setDuplicateSelected] = useState<number[]>([]);
@@ -2998,15 +3062,55 @@ function QuestionBank() {
       setMessage("已导入 " + result.imported + " 条题目" + (result.skipped ? "，自动跳过 " + result.skipped + " 行（含重复或空白）" : ""));
       void pushNotification({ kind: result.errors?.length ? "warning" : "success", title: "题库导入完成", content: `已导入 ${result.imported} 条${result.skipped ? `，跳过 ${result.skipped} 行（重复或空白）` : ""}${result.errors?.length ? `，${result.errors.length} 行导入失败` : ""}。` }).catch(() => undefined);
       await load(1);
+      if (importGenerateVoices && Array.isArray(result.importedQuestionIds) && result.importedQuestionIds.length) {
+        void generateImportedQuestionVoices(result.importedQuestionIds.map((id: unknown) => Number(id)).filter(Number.isInteger));
+      }
     } catch (error) { setMessage((error as Error).message); }
     finally { setImporting(false); }
   }
+  async function generateImportedQuestionVoices(questionIds: number[]) {
+    importVoiceCancelRef.current = false;
+    setGeneratingImportedVoices(true);
+    try {
+      const voiceData = await jsonFetch("/api/question-voices");
+      const templates = (voiceData.voices || []).filter((voice: { id?: number; kind?: string; status?: string }) => voice.kind === "settings_preview" && voice.status === "ready" && Number.isInteger(voice.id));
+      if (!templates.length) {
+        setMessage("题库已导入；尚未配置“设置声音试听”，因此未生成题目配音。");
+        return;
+      }
+      const totalTasks = questionIds.length * templates.length;
+      let completed = 0;
+      let failed = 0;
+      for (const questionId of questionIds) {
+        for (const template of templates) {
+          if (importVoiceCancelRef.current) {
+            setMessage(`已停止导入配音队列：已完成 ${completed}/${totalTasks} 项。`);
+            return;
+          }
+          try {
+            await jsonFetch("/api/question-voices", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ action: "synthesize-from-settings-preview", questionId, sourceVoiceId: template.id }),
+            });
+          } catch { failed += 1; }
+          completed += 1;
+          setMessage(`正在按设置声音生成导入题目配音：${completed}/${totalTasks}${failed ? `，失败 ${failed}` : ""}。`);
+        }
+      }
+      const summary = `导入题目配音队列完成：${completed - failed}/${totalTasks} 条成功${failed ? `，${failed} 条失败` : ""}。`;
+      setMessage(summary);
+      void pushNotification({ kind: failed ? "warning" : "success", title: "导入题目配音完成", content: summary }).catch(() => undefined);
+    } catch (error) {
+      setMessage(`导入题目配音未启动：${(error as Error).message}`);
+    } finally { setGeneratingImportedVoices(false); }
+  }
   function closeImport() {
     if (importing) return;
-    setImportOpen(false); setImportPreview(null); setImportFile(null); setImportTypeId("");
+    setImportOpen(false); setImportPreview(null); setImportFile(null); setImportTypeId(""); setImportGenerateVoices(false);
   }
   function openImport() {
-    setImportPreview(null); setImportFile(null); setImportTypeId(typeFilter || String(types[0]?.id || "")); setImportOpen(true);
+    setImportPreview(null); setImportFile(null); setImportTypeId(typeFilter || String(types[0]?.id || "")); setImportGenerateVoices(false); setImportOpen(true);
   }
   function previewDuplicateRows(rows: { row: number; content: string }[]) {
     return rows.slice(0, 3).map((item) => `第 ${item.row} 行：${item.content}`).join("；");
@@ -3172,6 +3276,9 @@ function QuestionBank() {
           <p>维护题目、答案和具体分类，也可以批量导入 Excel。</p>
         </div>
         <div className="bank-actions">
+          {generatingImportedVoices && <button className="secondary-action" onClick={() => { importVoiceCancelRef.current = true; setMessage("将在当前一条配音完成后停止导入配音队列。"); }}>
+            停止导入配音
+          </button>}
           <button className="secondary-action" onClick={duplicateOpen}>
             重复题处理
           </button>
@@ -3429,6 +3536,18 @@ function QuestionBank() {
                 onChange={importFileInputChange}
                 required={importFileRequired()}
               />
+            </label>
+            <label className="import-voice-option">
+              <input
+                type="checkbox"
+                checked={importGenerateVoices}
+                disabled={importing}
+                onChange={(event) => setImportGenerateVoices(event.target.checked)}
+              />
+              <span>
+                导入后按“设置声音试听”中的全部音色自动生成题目配音
+                <small>采用单条串行队列，可随时停止；未生成试听音色时会只导入题目，不会阻塞导入。</small>
+              </span>
             </label>
             {useImportPreview() && (
               <div className="import-preview" role="status">
@@ -4103,6 +4222,10 @@ function Settings({
   const [copiedBrowserUrl, setCopiedBrowserUrl] = useState(false);
   const [voicePreviews, setVoicePreviews] = useState<Array<{ id: number; name: string; provider: string; model: string; audioUrl: string }>>([]);
   const [voicePreviewLoading, setVoicePreviewLoading] = useState(true);
+  const [aiModelOptions, setAiModelOptions] = useState<Array<{ id: number; name: string }>>([]);
+  const [aiConfigId, setAiConfigId] = useState<number | null>(null);
+  const [defaultAiConfigId, setDefaultAiConfigId] = useState(0);
+  const [aiModelSaving, setAiModelSaving] = useState(false);
   const browserUrls = {
     chrome: "chrome://flags/#unsafely-treat-insecure-origin-as-secure",
     edge: "edge://flags/#unsafely-treat-insecure-origin-as-secure",
@@ -4137,6 +4260,9 @@ function Settings({
     jsonFetch("/api/settings")
       .then((data) => {
         setVoicePreviews(data.voicePreviews || []);
+        setAiModelOptions(data.aiModelOptions || []);
+        setAiConfigId(data.settings?.aiConfigId ?? null);
+        setDefaultAiConfigId(Number(data.settings?.defaultAiConfigId || 0));
       })
       .catch(() => undefined)
       .finally(() => setVoicePreviewLoading(false));
@@ -4166,6 +4292,19 @@ function Settings({
     });
     onChange(nextAutoRecord, nextAvoidRepeated, nextReadQuestion);
     setSaved("设置已保存");
+  }
+  async function chooseAiModel(nextId: number | null) {
+    setAiModelSaving(true);
+    try {
+      const data = await jsonFetch("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ autoRecord, avoidRepeated, readQuestion, aiConfigId: nextId }),
+      });
+      setAiConfigId(data.settings.aiConfigId ?? null);
+      setSaved(nextId == null ? "已恢复使用管理员默认模型" : "AI 模型偏好已保存");
+    } catch (error) { setSaved((error as Error).message); }
+    finally { setAiModelSaving(false); }
   }
   async function copyOrigin() {
     if (!origin) return;
@@ -4259,6 +4398,20 @@ function Settings({
           <strong>当前可用朗读音色</strong>
           <p>目前系统为各个题目配备有以下音色，开启朗读功能后会随机选择。后续可能适配更多音色，并开发朗读音色偏好等功能。</p>
           {voicePreviewLoading ? <small>正在加载试听音色…</small> : voicePreviews.length === 0 ? <small>管理员暂未配置试听音色。</small> : <div className="settings-voice-list">{voicePreviews.map((voice) => <div className="settings-voice-item" key={voice.id}><span>{voice.name}<small>{voice.provider === "baidu" ? "百度" : "百炼"}{voice.model ? ` · ${voice.model}` : ""}</small></span><audio controls preload="none" src={voice.audioUrl} /></div>)}</div>}
+        </div>
+      </section>
+      <section className="setting-card ai-model-setting">
+        <div className="ai-model-setting-head">
+          <h2>AI 交互模型</h2>
+          <p>用于 AI 追问、自由讨论和复盘。未选择时使用管理员默认模型；模型不可用或额度耗尽时会自动回退。</p>
+        </div>
+        <div className="user-model-picker" role="radiogroup" aria-label="选择 AI 交互模型">
+          <button type="button" role="radio" aria-checked={aiConfigId === null} className={aiConfigId === null ? "selected" : ""} disabled={aiModelSaving} onClick={() => void chooseAiModel(null)}>
+            <strong>管理员默认</strong><small>{aiModelOptions.find((item) => item.id === defaultAiConfigId)?.name || "系统默认模型"}</small>
+          </button>
+          {aiModelOptions.map((item) => <button type="button" role="radio" aria-checked={aiConfigId === item.id} className={aiConfigId === item.id ? "selected" : ""} disabled={aiModelSaving} onClick={() => void chooseAiModel(item.id)} key={item.id}>
+            <strong>{item.name}</strong><small>{item.id === defaultAiConfigId ? "管理员默认" : "可选模型"}</small>
+          </button>)}
         </div>
       </section>
       {saved && <p className="saved">✓ {saved}</p>}
@@ -5936,6 +6089,7 @@ type AiModelConfig = {
   model: string;
   apiKeySet: boolean;
   apiKeyPreview: string;
+  enabled: boolean;
   apiKey?: string;
 };
 type AiPrompt = { id: number; name: string; content: string };
@@ -6051,6 +6205,7 @@ function AiConfig() {
       apiKeySet: false,
       apiKeyPreview: "",
       apiKey: "",
+      enabled: true,
     });
   }
   function editModel(model: AiModelConfig) {
@@ -6083,6 +6238,7 @@ function AiConfig() {
             baseUrl: editingModel.baseUrl,
             model: editingModel.model,
             apiKey: editingModel.apiKey || "",
+            enabled: editingModel.enabled,
           },
         }),
       });
@@ -6209,6 +6365,17 @@ function AiConfig() {
       setMessage((error as Error).message);
     }
   }
+  async function toggleModel(id: number, enabled: boolean) {
+    try {
+      const data = await jsonFetch("/api/ai/config", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ toggleConfigId: id, toggleConfigEnabled: !enabled, activeConfigId: state.activeConfigId, activePromptId: state.activePromptId, autoTranscribe: state.autoTranscribe }),
+      });
+      setState(data);
+      setMessage(enabled ? "模型已禁用，使用该模型的用户将自动回退到默认模型。" : "模型已启用，用户现在可以选择它。");
+    } catch (error) { setMessage((error as Error).message); }
+  }
   async function removePrompt(id: number) {
     if (!window.confirm("确定删除这个提示词吗？")) return;
     try {
@@ -6244,7 +6411,7 @@ function AiConfig() {
           <div className="ai-panel-head">
             <div>
               <span className="section-kicker">MODEL CONFIGURATIONS</span>
-              <h3>模型配置</h3>
+              <h3>默认模型配置</h3>
             </div>
             <button
               type="button"
@@ -6255,14 +6422,14 @@ function AiConfig() {
             </button>
           </div>
           <label className="ai-active-select">
-            当前使用的模型
+            管理员默认模型
             <select
               value={state.activeConfigId}
               onChange={(event) =>
                 void selectActive(Number(event.target.value))
               }
             >
-              {state.configs.map((item) => (
+              {state.configs.filter((item) => item.enabled).map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.name} · {providerNames[item.provider] || item.provider}{" "}
                   · {item.model}
@@ -6288,7 +6455,7 @@ function AiConfig() {
                 className={
                   item.id === state.activeConfigId
                     ? "ai-config-card active"
-                    : "ai-config-card"
+                    : item.enabled ? "ai-config-card" : "ai-config-card disabled"
                 }
                 key={item.id}
               >
@@ -6302,6 +6469,9 @@ function AiConfig() {
                 <div className="ai-card-actions">
                   <button type="button" onClick={() => editModel(item)}>
                     编辑
+                  </button>
+                  <button type="button" onClick={() => void toggleModel(item.id, item.enabled)}>
+                    {item.enabled ? "禁用" : "启用"}
                   </button>
                   <button
                     type="button"

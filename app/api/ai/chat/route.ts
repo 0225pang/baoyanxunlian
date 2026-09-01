@@ -1,6 +1,6 @@
 import { apiError, requireUser } from '@/lib/auth';
 import { execute, query } from '@/lib/db';
-import { aiRequestError, chatCompletionsUrl, extractChatContent, getActiveAiConfig, safeJsonParse, samplingParameters, userFacingAiError } from '@/lib/ai';
+import { aiRequestErrorWithFallback, chatCompletionsUrl, extractChatContent, getActiveAiConfig, safeJsonParse, samplingParameters, userFacingAiError } from '@/lib/ai';
 import { assertApiAccess, logApiUsage, readTokenUsage } from '@/lib/usage';
 import type { RowDataPacket } from 'mysql2/promise';
 
@@ -27,7 +27,7 @@ export async function POST(request: Request) {
     const userId = await targetUserId(current.id, current.role, body.userId);
     const message = String(body.message || '').trim();
     if (!Number.isInteger(questionId) || questionId <= 0 || !message) return Response.json({ error: '问题和消息不能为空' }, { status: 400 });
-    const config = await getActiveAiConfig();
+    const config = await getActiveAiConfig(userId);
     if (!config?.apiKey) return Response.json({ error: 'AI 尚未配置 API Key，请联系管理员' }, { status: 503 });
     await assertApiAccess(userId, 'ai');
     const existing = await query<RowDataPacket[]>('SELECT id, role, content FROM ai_messages WHERE user_id = ? AND question_id = ? AND evaluation_id IS NULL ORDER BY id ASC', [userId, questionId]);
@@ -66,7 +66,7 @@ export async function POST(request: Request) {
     });
     if (!response.ok) {
       const raw = await response.text();
-      return Response.json({ error: aiRequestError(response.status, raw) }, { status: 502 });
+      return Response.json({ error: await aiRequestErrorWithFallback(config, response.status, raw) }, { status: 502 });
     }
 
     const encoder = new TextEncoder();

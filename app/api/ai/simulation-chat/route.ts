@@ -1,5 +1,5 @@
 import { apiError, requireUser } from '@/lib/auth';
-import { aiRequestError, chatCompletionsUrl, extractChatContent, getActiveAiConfig, safeJsonParse, samplingParameters, userFacingAiError } from '@/lib/ai';
+import { aiRequestErrorWithFallback, chatCompletionsUrl, extractChatContent, getActiveAiConfig, safeJsonParse, samplingParameters, userFacingAiError } from '@/lib/ai';
 import { execute, query } from '@/lib/db';
 import { assertApiAccess, logApiUsage, readTokenUsage } from '@/lib/usage';
 import type { RowDataPacket } from 'mysql2/promise';
@@ -35,7 +35,7 @@ export async function POST(request: Request) {
     const sessions = await query<RowDataPacket[]>('SELECT id, user_id AS userId, template_id AS templateId, template_name AS templateName, status FROM simulation_sessions WHERE id = ? LIMIT 1', [sessionId]);
     const session = sessions[0];
     if (!session || (current.role !== 'admin' && Number(session.userId) !== current.id)) return Response.json({ error: '模拟记录不存在或无权访问' }, { status: 404 });
-    const config = await getActiveAiConfig(); if (!config?.apiKey) return Response.json({ error: '请先在管理后台配置 AI 模型 API Key' }, { status: 503 });
+    const config = await getActiveAiConfig(Number(session.userId)); if (!config?.apiKey) return Response.json({ error: '请先在管理后台配置 AI 模型 API Key' }, { status: 503 });
     await assertApiAccess(Number(session.userId), 'ai');
     const context = await simulationContext(Number(session.userId), session.templateId == null ? null : Number(session.templateId), String(session.templateName));
     const rows = await query<RowDataPacket[]>('SELECT role, content FROM simulation_messages WHERE session_id = ? AND evaluation_id IS NULL ORDER BY id ASC', [sessionId]);
@@ -45,7 +45,7 @@ export async function POST(request: Request) {
       { role: 'system', content: '你是小鱼，一名友好、专业的食品专业保研面试讨论伙伴。请直接回答学员当前的问题，进行自然的追问、解释或表达打磨。不要每次都输出完整评估模板，除非学员明确要求。不要虚构训练记录中没有的事实。' },
       { role: 'system', content: '以下是本次及最近一次同学校流程的模拟题目、回答和转写，仅作为讨论上下文：\n' + JSON.stringify(context) }, ...history, { role: 'user', content: message },
     ] }) });
-    if (!response.ok) { const raw = await response.text(); return Response.json({ error: aiRequestError(response.status, raw) }, { status: 502 }); }
+    if (!response.ok) { const raw = await response.text(); return Response.json({ error: await aiRequestErrorWithFallback(config, response.status, raw) }, { status: 502 }); }
     const encoder = new TextEncoder();
     const stream = new ReadableStream({ async start(controller) {
       const send = (payload: Record<string, string>) => controller.enqueue(encoder.encode('data: ' + JSON.stringify(payload) + '\n\n'));

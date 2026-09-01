@@ -157,6 +157,7 @@ const schema = [
     base_url VARCHAR(500) NOT NULL,
     model VARCHAR(150) NOT NULL,
     api_key TEXT NULL,
+    enabled TINYINT(1) NOT NULL DEFAULT 1,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE KEY uq_ai_model_config_name (name)
@@ -568,6 +569,12 @@ async function initializeDatabase(db: Pool) {
   }
   if (!(await hasColumn(db, 'user_settings', 'default_voice_id'))) {
     await db.query('ALTER TABLE user_settings ADD COLUMN default_voice_id BIGINT UNSIGNED NULL AFTER read_question');
+  }
+  if (!(await hasColumn(db, 'user_settings', 'ai_config_id'))) {
+    await db.query('ALTER TABLE user_settings ADD COLUMN ai_config_id BIGINT UNSIGNED NULL AFTER default_voice_id');
+  }
+  if (!(await hasColumn(db, 'ai_model_configs', 'enabled'))) {
+    await db.query('ALTER TABLE ai_model_configs ADD COLUMN enabled TINYINT(1) NOT NULL DEFAULT 1 AFTER api_key');
   }
   const readQuestionColumn = await columnInfo(db, 'user_settings', 'read_question');
   if (

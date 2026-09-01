@@ -191,17 +191,18 @@ export async function PUT(request: Request) {
       return Response.json({ preview: true, totalRows: parsed.totalRows, validRows: parsed.candidates.length, willImport: importable.length, blankRows: parsed.blankRows, duplicateExisting, duplicateInFile });
     }
     if (String(form.get('confirmImportDuplicates')) !== '1') return Response.json({ error: '请先完成导入预检确认。' }, { status: 400 });
-    let imported = 0; let skipped = parsed.blankRows + duplicateExisting.length + duplicateInFile.length; const errors: string[] = [];
+    let imported = 0; let skipped = parsed.blankRows + duplicateExisting.length + duplicateInFile.length; const errors: string[] = []; const importedQuestionIds: number[] = [];
     const currentExisting = await existingContentKeys();
     for (const candidate of importable) {
       const key = normalizedContent(candidate.content);
       if (currentExisting.has(key)) { skipped += 1; continue; }
       try {
-        await execute('INSERT INTO questions (type_id, content, answer, subcategory, extra, status) VALUES (?, ?, ?, ?, ?, ?)', [typeId, candidate.content, candidate.answer || null, candidate.subcategory || null, candidate.extra, 'active']);
+        const created = await execute('INSERT INTO questions (type_id, content, answer, subcategory, extra, status) VALUES (?, ?, ?, ?, ?, ?)', [typeId, candidate.content, candidate.answer || null, candidate.subcategory || null, candidate.extra, 'active']);
         currentExisting.add(key);
         imported += 1;
+        importedQuestionIds.push(Number(created.insertId));
       } catch (error) { errors.push(`第 ${candidate.row} 行：${String(error)}`); }
     }
-    return Response.json({ imported, skipped, errors: errors.slice(0, 20), totalRows: parsed.totalRows, duplicateExisting: duplicateExisting.length, duplicateInFile: duplicateInFile.length });
+    return Response.json({ imported, importedQuestionIds, skipped, errors: errors.slice(0, 20), totalRows: parsed.totalRows, duplicateExisting: duplicateExisting.length, duplicateInFile: duplicateInFile.length });
   } catch (error) { return apiError(error); }
 }

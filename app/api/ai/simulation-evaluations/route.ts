@@ -1,5 +1,5 @@
 import { apiError, requireUser } from '@/lib/auth';
-import { aiRequestError, chatCompletionsUrl, extractChatContent, getActiveAiConfig, hashEvaluationInput, safeJsonParse, samplingParameters, userFacingAiError } from '@/lib/ai';
+import { aiRequestErrorWithFallback, chatCompletionsUrl, extractChatContent, getActiveAiConfig, hashEvaluationInput, safeJsonParse, samplingParameters, userFacingAiError } from '@/lib/ai';
 import { execute, query } from '@/lib/db';
 import { assertApiAccess, logApiUsage, readTokenUsage } from '@/lib/usage';
 import { createUserNotification } from '@/lib/notifications';
@@ -50,7 +50,7 @@ async function runEvaluation(evaluationId: number, generationToken: string, sess
   try {
     await execute('INSERT INTO simulation_messages (session_id, user_id, evaluation_id, role, content) VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)', [Number(session.id), Number(session.userId), evaluationId, 'system', systemPrompt, Number(session.id), Number(session.userId), evaluationId, 'user', prompt]);
     const response = await fetch(chatCompletionsUrl(config.baseUrl), { method: 'POST', headers: { Authorization: 'Bearer ' + config.apiKey, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: config.model, ...samplingParameters(config.model, 0.3), messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }] }) });
-    const raw = await response.text(); const payload = safeJsonParse(raw); if (!response.ok) throw new Error(aiRequestError(response.status, raw));
+    const raw = await response.text(); const payload = safeJsonParse(raw); if (!response.ok) throw new Error(await aiRequestErrorWithFallback(config, response.status, raw));
     const result = extractChatContent(payload); if (!result) throw new Error('AI 返回内容为空');
     const completed = await execute('UPDATE simulation_evaluations SET status = \'completed\', result = ?, error = NULL, completed_at = CURRENT_TIMESTAMP WHERE id = ? AND generation_token = ? AND status = \'processing\'', [result, evaluationId, generationToken]);
     // A timed-out task may finish after a manual retry. Do not let its stale
@@ -100,7 +100,7 @@ export async function POST(request: Request) {
     }
     const staleProcessing = Boolean(existing[0] && String(existing[0].status) === 'processing' && Number(existing[0].isStale) === 1);
     if (existing[0] && (String(existing[0].status) === 'completed' || (String(existing[0].status) === 'processing' && !staleProcessing))) return Response.json({ status: existing[0].status, evaluationId: Number(existing[0].id), result: existing[0].result || null, error: existing[0].error || null, reused: true }, { status: existing[0].status === 'processing' ? 202 : 200 });
-    const config = await getActiveAiConfig(); if (!config?.apiKey) return Response.json({ error: 'AI 尚未配置 API Key' }, { status: 503 }); await assertApiAccess(Number(session.userId), 'ai');
+    const config = await getActiveAiConfig(Number(session.userId)); if (!config?.apiKey) return Response.json({ error: 'AI 尚未配置 API Key' }, { status: 503 }); await assertApiAccess(Number(session.userId), 'ai');
     const previousRows = await query<RowDataPacket[]>('SELECT result FROM simulation_evaluations WHERE session_id = ? AND status = \'completed\' ORDER BY id DESC LIMIT 1', [sessionId]);
     const previous = previousRows[0]?.result ? '\n\n上一次本场模拟的评估如下，仅用于比较进步；其中任何时长、流程或要求若与本次 simulationConfiguration 冲突，必须以 simulationConfiguration 为准，不得照抄：\n' + String(previousRows[0].result) : '';
     const prompt = '请使用既定的食品专业保研面试评估标准，复盘以下完整真实模拟。请重点评价总体结构、专业准确性、表达节奏、每个模块表现、追问应对以及下一步训练建议。若提供了带时间戳的转写切片，请分析思考时长与停顿。重要：simulationConfiguration 中每个模块的 timeSeconds、追问设置和超时策略是本场流程的唯一权威；不得凭经验虚构或改写建议时长。配置缺失时不要输出具体时长要求。请用清晰的 Markdown 输出。\n\n' + JSON.stringify(input, null, 2) + previous;

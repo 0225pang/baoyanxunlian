@@ -1,7 +1,7 @@
 import { apiError, requireUser } from "@/lib/auth";
 import { execute, query } from "@/lib/db";
 import {
-  aiRequestError,
+  aiRequestErrorWithFallback,
   chatCompletionsUrl,
   extractChatContent,
   getActiveAiConfig,
@@ -40,7 +40,7 @@ export async function POST(
         { error: "模拟场次不存在或无权访问" },
         { status: 404 },
       );
-    const config = await getActiveAiConfig();
+    const config = await getActiveAiConfig(Number(sessions[0].userId));
     if (!config?.apiKey)
       return Response.json(
         { error: "请先在管理后台配置 AI 模型" },
@@ -89,7 +89,7 @@ export async function POST(
     const raw = await response.text();
     if (!response.ok)
       return Response.json(
-        { error: aiRequestError(response.status, raw) },
+        { error: await aiRequestErrorWithFallback(config, response.status, raw) },
         { status: 502 },
       );
     const payload = safeJsonParse(raw);

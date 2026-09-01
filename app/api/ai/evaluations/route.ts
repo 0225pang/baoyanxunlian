@@ -1,6 +1,6 @@
 import { apiError, requireUser } from '@/lib/auth';
 import { execute, query } from '@/lib/db';
-import { aiRequestError, chatCompletionsUrl, extractChatContent, getActiveAiConfig, hashEvaluationInput, safeJsonParse, samplingParameters, userFacingAiError, type ActiveAiConfig } from '@/lib/ai';
+import { aiRequestErrorWithFallback, chatCompletionsUrl, extractChatContent, getActiveAiConfig, hashEvaluationInput, safeJsonParse, samplingParameters, userFacingAiError, type ActiveAiConfig } from '@/lib/ai';
 import { assertApiAccess, logApiUsage, readTokenUsage } from '@/lib/usage';
 import { createUserNotification } from '@/lib/notifications';
 import type { RowDataPacket } from 'mysql2/promise';
@@ -35,7 +35,7 @@ async function runEvaluation(evaluationId: number, userId: number, questionId: n
     });
     const raw = await response.text();
     const payload = safeJsonParse(raw);
-    if (!response.ok) throw new Error(aiRequestError(response.status, raw));
+    if (!response.ok) throw new Error(await aiRequestErrorWithFallback(config, response.status, raw));
     const result = extractChatContent(payload);
     if (!result) throw new Error('AI 返回内容为空');
     await execute('UPDATE ai_evaluations SET status = \'completed\', result = ?, error = NULL, completed_at = CURRENT_TIMESTAMP WHERE id = ?', [result, evaluationId]);
@@ -109,7 +109,7 @@ export async function POST(request: Request) {
     const inputHash = hashEvaluationInput({ questionId, userId, attempts: input.attempts.map((attempt) => ({ id: attempt.id, answer: attempt.answer, transcript: attempt.transcript, transcriptSegments: attempt.transcriptSegments })) });
     const existing = await query<RowDataPacket[]>('SELECT id, status, result, error FROM ai_evaluations WHERE user_id = ? AND question_id = ? AND input_hash = ? LIMIT 1', [userId, questionId, inputHash]);
     if (existing[0] && ['processing', 'completed'].includes(String(existing[0].status))) return Response.json({ status: existing[0].status, evaluationId: Number(existing[0].id), result: existing[0].result || null, error: existing[0].error || null, reused: true }, { status: existing[0].status === 'processing' ? 202 : 200 });
-    const config = await getActiveAiConfig();
+    const config = await getActiveAiConfig(userId);
     if (!config?.apiKey) return Response.json({ error: 'AI 尚未配置 API Key，请先到管理后台填写' }, { status: 503 });
     await assertApiAccess(userId, 'ai');
     const previousRows = await query<RowDataPacket[]>('SELECT result FROM ai_evaluations WHERE user_id = ? AND question_id = ? AND status = \'completed\' ORDER BY id DESC LIMIT 1', [userId, questionId]);
