@@ -4553,6 +4553,7 @@ function Users() {
             <span>用户</span>
             <span>登录账号</span>
             <span>在线状态</span>
+            <span>上次登录</span>
             <span>角色</span>
             <span>状态</span>
             <span>操作</span>
@@ -4565,8 +4566,9 @@ function Users() {
                 </span>
                 <strong>{item.displayName}</strong>
               </div>
-              <span className="user-username">@{item.username}<br /><small>上次登录：{item.lastLoginAt ? new Date(item.lastLoginAt).toLocaleString("zh-CN") : "从未登录"}</small></span>
+              <span className="user-username">@{item.username}</span>
               <small className={item.online ? "presence online" : "presence offline"}>{item.online ? "在线" : "离线"}</small>
+              <span className="user-last-login">{item.lastLoginAt ? new Date(item.lastLoginAt).toLocaleString("zh-CN") : "从未登录"}</span>
               <span>{item.role === "admin" ? "管理员" : "普通用户"}</span>
               <small className={`status-${item.status}`}>
                 {item.status === "active"
