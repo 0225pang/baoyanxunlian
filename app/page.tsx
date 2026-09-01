@@ -1198,6 +1198,7 @@ function Simulation({
   const audioContext = useRef<AudioContext | null>(null);
   const [liveTranscript, setLiveTranscript] = useState("");
   const [realtimeStatus, setRealtimeStatus] = useState("");
+  const [realtimeRetryAvailable, setRealtimeRetryAvailable] = useState(false);
   const realtimeSocket = useRef<WebSocket | null>(null);
   const realtimeAudioContext = useRef<AudioContext | null>(null);
   const realtimeSource = useRef<MediaStreamAudioSourceNode | null>(null);
@@ -1207,6 +1208,7 @@ function Simulation({
   const liveTranscriptRef = useRef("");
   const liveSegmentsRef = useRef<TranscriptSegment[]>([]);
   const realtimeFailedRef = useRef(false);
+  const realtimeOffsetMs = useRef(0);
   const segmentStopResolver = useRef<((blob: Blob | null) => void) | null>(
     null,
   );
@@ -1467,10 +1469,9 @@ function Simulation({
     if (realtimeRun.current !== run) return;
     const sentence = readRealtimeSentence(payload);
     if (!sentence.text) return;
-    const startMs =
-      sentence.startMs ||
-      Math.max(0, liveSegmentsRef.current.at(-1)?.endMs || 0);
-    const endMs = Math.max(startMs, sentence.endMs || startMs);
+    const rawStartMs = sentence.startMs || Math.max(0, liveSegmentsRef.current.at(-1)?.endMs || 0);
+    const startMs = rawStartMs + realtimeOffsetMs.current;
+    const endMs = Math.max(startMs, (sentence.endMs || rawStartMs) + realtimeOffsetMs.current);
     const next = [...liveSegmentsRef.current];
     const existing = next.findIndex((item) => item.startMs === startMs);
     if (existing >= 0) next[existing] = { startMs, endMs, text: sentence.text };
@@ -1491,12 +1492,18 @@ function Simulation({
     setRealtimeStatus("实时转写中");
   }
 
-  async function startRealtimeTranscription(media: MediaStream) {
+  async function startRealtimeTranscription(media: MediaStream, resume = false) {
     stopRealtimeTranscription(true);
-    liveTranscriptRef.current = "";
-    liveSegmentsRef.current = [];
+    if (!resume) {
+      liveTranscriptRef.current = "";
+      liveSegmentsRef.current = [];
+    }
     realtimeFailedRef.current = false;
-    setLiveTranscript("");
+    realtimeOffsetMs.current = resume && segmentRecordingStartedAt.current
+      ? Math.max(0, Date.now() - segmentRecordingStartedAt.current)
+      : 0;
+    if (!resume) setLiveTranscript("");
+    setRealtimeRetryAvailable(false);
     const run = realtimeRun.current;
     try {
       const access = await jsonFetch("/api/realtime-asr/token", {
@@ -1527,6 +1534,7 @@ function Simulation({
           const message = JSON.parse(String(event.data));
           if (message.type === "ready") {
             setRealtimeStatus("实时转写中");
+            setRealtimeRetryAvailable(false);
             return;
           }
           if (message.type === "result")
@@ -1534,22 +1542,28 @@ function Simulation({
           if (message.type === "error") {
             realtimeFailedRef.current = true;
             setRealtimeStatus(`实时转写不可用：${message.error}`);
+            setRealtimeRetryAvailable(true);
           }
-          if (
-            message.type === "closed" &&
-            !liveTranscriptRef.current &&
-            !realtimeFailedRef.current
-          )
-            setRealtimeStatus(
-              `实时转写连接已结束：${message.reason || message.code || "未知原因"}`,
-            );
+          if (message.type === "closed") {
+            realtimeFailedRef.current = true;
+            setRealtimeStatus(`实时转写已中断，录音仍会正常保存：${message.reason || message.code || "未知原因"}`);
+            setRealtimeRetryAvailable(true);
+          }
         } catch {
           /* ignore malformed upstream payload */
         }
       };
       socket.onerror = () => {
-        if (realtimeRun.current === run)
+        if (realtimeRun.current === run) {
           setRealtimeStatus("实时转写连接失败，录音仍会正常保存");
+          setRealtimeRetryAvailable(true);
+        }
+      };
+      socket.onclose = (event) => {
+        if (realtimeRun.current !== run) return;
+        realtimeFailedRef.current = true;
+        setRealtimeStatus(`实时转写已中断，录音仍会正常保存：${event.reason || event.code || "连接关闭"}`);
+        setRealtimeRetryAvailable(true);
       };
       const AudioContextCtor =
         window.AudioContext ||
@@ -1583,7 +1597,13 @@ function Simulation({
       await context.resume();
     } catch {
       setRealtimeStatus("实时转写启动失败，录音仍会正常保存");
+      setRealtimeRetryAvailable(true);
     }
+  }
+  function retryRealtimeTranscription() {
+    if (!recording || !stream.current) return;
+    setRealtimeStatus("正在恢复实时转写，已识别的内容会保留…");
+    void startRealtimeTranscription(stream.current, true);
   }
   function questionAudioKey(index = stepIndex, followupRoundValue = followupRound, isFollowup = Boolean(followup)) {
     return isFollowup ? `${index}:followup:${followupRoundValue}` : `${index}:main`;
@@ -1916,6 +1936,7 @@ function Simulation({
     liveSegmentsRef.current = [];
     setLiveTranscript("");
     setRealtimeStatus("");
+    setRealtimeRetryAvailable(false);
     return draft;
   }
   async function next() {
@@ -2210,7 +2231,7 @@ function Simulation({
               placeholder="可选：记录回答提纲；录音和实时文字稿将保存到本场模拟。"
             />
             {realtimeStatus && (
-              <div className="realtime-status">{realtimeStatus}</div>
+              <div className="realtime-status">{realtimeStatus}{realtimeRetryAvailable && recording ? <button type="button" onClick={retryRealtimeTranscription}>恢复实时转写</button> : null}</div>
             )}
             {liveTranscript && (
               <div className="live-transcript">

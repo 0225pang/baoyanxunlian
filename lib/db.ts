@@ -261,6 +261,10 @@ const schema = [
     audio_mime VARCHAR(100) NULL,
     question_audio_data LONGBLOB NULL,
     question_audio_mime VARCHAR(100) NULL,
+    transcript_repair_count TINYINT UNSIGNED NOT NULL DEFAULT 0,
+    transcript_repair_status VARCHAR(20) NOT NULL DEFAULT 'none',
+    transcript_repair_error TEXT NULL,
+    transcript_repaired_at DATETIME NULL,
     elapsed_seconds INT UNSIGNED NOT NULL DEFAULT 0,
     followup_question TEXT NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -489,6 +493,18 @@ async function ensureSimulationColumns(db: Pool) {
   }
   if (!(await hasColumn(db, 'simulation_answers', 'question_audio_mime'))) {
     await db.query('ALTER TABLE simulation_answers ADD COLUMN question_audio_mime VARCHAR(100) NULL AFTER question_audio_data');
+  }
+  if (!(await hasColumn(db, 'simulation_answers', 'transcript_repair_count'))) {
+    await db.query("ALTER TABLE simulation_answers ADD COLUMN transcript_repair_count TINYINT UNSIGNED NOT NULL DEFAULT 0 AFTER question_audio_mime");
+  }
+  if (!(await hasColumn(db, 'simulation_answers', 'transcript_repair_status'))) {
+    await db.query("ALTER TABLE simulation_answers ADD COLUMN transcript_repair_status VARCHAR(20) NOT NULL DEFAULT 'none' AFTER transcript_repair_count");
+  }
+  if (!(await hasColumn(db, 'simulation_answers', 'transcript_repair_error'))) {
+    await db.query('ALTER TABLE simulation_answers ADD COLUMN transcript_repair_error TEXT NULL AFTER transcript_repair_status');
+  }
+  if (!(await hasColumn(db, 'simulation_answers', 'transcript_repaired_at'))) {
+    await db.query('ALTER TABLE simulation_answers ADD COLUMN transcript_repaired_at DATETIME NULL AFTER transcript_repair_error');
   }
 }
 async function ensureQuestionVoiceColumns(db: Pool) {
