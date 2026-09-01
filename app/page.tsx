@@ -6118,12 +6118,14 @@ type AiConfigState = {
 const providerDefaults: Record<string, string> = {
   bailian: "https://dashscope.aliyuncs.com/compatible-mode/v1",
   siliconflow: "https://api.siliconflow.cn/v1",
+  volcengine: "https://ark.cn-beijing.volces.com/api/v3",
   openai: "https://api.openai.com/v1",
   custom: "",
 };
 const providerNames: Record<string, string> = {
   bailian: "阿里云百炼",
   siliconflow: "硅基流动",
+  volcengine: "火山引擎方舟",
   openai: "OpenAI 兼容接口",
   custom: "自定义平台",
 };
@@ -6134,6 +6136,7 @@ const modelPresets: Record<string, string[]> = {
     "Qwen/Qwen3-32B",
     "deepseek-ai/DeepSeek-V3",
   ],
+  volcengine: ["doubao-seed-2-1-turbo-260628", "doubao-seed-1-6-thinking", "自定义方舟接入点"],
   openai: ["gpt-4o-mini", "gpt-4.1-mini", "自定义模型"],
   custom: [],
 };
