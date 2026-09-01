@@ -10,6 +10,14 @@
   request_body {
     max_size 55MB
   }
+  handle_errors {
+    @app_unavailable expression `{err.status_code} == 502 || {err.status_code} == 503 || {err.status_code} == 504`
+    handle @app_unavailable {
+      header Content-Type "text/html; charset=utf-8"
+      header Retry-After "120"
+      respond `<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>服务器维护中</title></head><body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#f6fbf9;color:#16352b;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',sans-serif"><main style="max-width:430px;margin:24px;padding:44px 36px;border-radius:24px;background:#fff;box-shadow:0 16px 50px rgba(22,53,43,.12);text-align:center"><div style="font-size:42px;margin-bottom:16px">🐟</div><h1 style="margin:0 0 14px;font-size:25px">服务器正在维护当中</h1><p style="margin:0;color:#5b6e66;line-height:1.8">很快上线，请及时关注</p></main></body></html>` 503
+    }
+  }
 }
 
 # Caddy automatically obtains and renews a trusted Let's Encrypt certificate
