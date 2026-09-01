@@ -4459,6 +4459,7 @@ function Users() {
   }
   async function remove() {
     if (!pendingDelete) return;
+    if (!window.confirm(`确定删除用户“${pendingDelete.displayName}”（@${pendingDelete.username}）吗？此操作${deleteRecords ? "会同时删除其作答记录和录音，" : "不会删除其已有作答记录，"}不可撤销。`)) return;
     try {
       await jsonFetch("/api/users", {
         method: "DELETE",
@@ -4551,6 +4552,7 @@ function Users() {
           <div className="user-table-head">
             <span>用户</span>
             <span>登录账号</span>
+            <span>在线状态</span>
             <span>角色</span>
             <span>状态</span>
             <span>操作</span>
@@ -4561,9 +4563,10 @@ function Users() {
                 <span className="user-avatar">
                   {item.displayName.slice(0, 1)}
                 </span>
-                <strong>{item.displayName}</strong><small className={item.online ? "presence online" : "presence offline"}>{item.online ? "在线" : "离线"}</small>
+                <strong>{item.displayName}</strong>
               </div>
               <span className="user-username">@{item.username}<br /><small>上次登录：{item.lastLoginAt ? new Date(item.lastLoginAt).toLocaleString("zh-CN") : "从未登录"}</small></span>
+              <small className={item.online ? "presence online" : "presence offline"}>{item.online ? "在线" : "离线"}</small>
               <span>{item.role === "admin" ? "管理员" : "普通用户"}</span>
               <small className={`status-${item.status}`}>
                 {item.status === "active"
@@ -4587,37 +4590,6 @@ function Users() {
                   </button>
                 )}
               </div>
-              {pendingDelete?.id === item.id && (
-                <div className="delete-modal">
-                  <strong>确定删除 {item.username}？</strong>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={deleteRecords}
-                      onChange={(event) =>
-                        setDeleteRecords(event.target.checked)
-                      }
-                    />{" "}
-                    同时删除该用户的作答记录和录音
-                  </label>
-                  <div>
-                    <button onClick={() => void toggleLogin(item)}>
-                      {item.status === "disabled" ? "恢复登录" : "禁用登录"}
-                    </button>
-                    <button
-                      onClick={() => {
-                        setPendingDelete(null);
-                        setDeleteRecords(false);
-                      }}
-                    >
-                      取消
-                    </button>
-                    <button className="danger" onClick={() => void remove()}>
-                      确定删除
-                    </button>
-                  </div>
-                </div>
-              )}
             </article>
           ))}
         </div>
@@ -4647,6 +4619,19 @@ function Users() {
           </form>
         </div>
       </section>
+      {pendingDelete && (
+        <div className="modal-backdrop user-action-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) { setPendingDelete(null); setDeleteRecords(false); } }}>
+          <section className="user-action-modal" role="dialog" aria-modal="true" aria-labelledby="user-action-title">
+            <button className="modal-close" aria-label="关闭用户操作" onClick={() => { setPendingDelete(null); setDeleteRecords(false); }}>×</button>
+            <span className="section-kicker">ACCOUNT ACTIONS</span>
+            <h2 id="user-action-title">管理用户</h2>
+            <div className="user-action-summary"><span>{pendingDelete.displayName.slice(0, 1)}</span><div><strong>{pendingDelete.displayName}</strong><small>@{pendingDelete.username} · {pendingDelete.status === "disabled" ? "当前已禁用" : "当前可登录"}</small></div></div>
+            <p>禁用后会立即退出该用户所有已登录页面；删除账号前请确认是否一并删除其作答记录和录音。</p>
+            <label className="delete-record-option"><input type="checkbox" checked={deleteRecords} onChange={(event) => setDeleteRecords(event.target.checked)} /> 同时删除该用户的作答记录和录音</label>
+            <div className="user-action-buttons"><button className="action-disable" onClick={() => void toggleLogin(pendingDelete)}>{pendingDelete.status === "disabled" ? "恢复登录" : "禁用登录"}</button><button onClick={() => { setPendingDelete(null); setDeleteRecords(false); }}>取消</button><button className="danger" onClick={() => void remove()}>确定删除</button></div>
+          </section>
+        </div>
+      )}
       {createOpen && (
         <div
           className="modal-backdrop"
