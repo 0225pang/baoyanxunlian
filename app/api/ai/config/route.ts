@@ -10,6 +10,8 @@ type ModelRow = RowDataPacket & {
   model: string;
   apiKey: string | null;
   enabled: number;
+  logoImageId: number | null;
+  logoFilename: string | null;
 };
 type PromptRow = RowDataPacket & { id: number; name: string; content: string };
 type AsrRow = RowDataPacket & {
@@ -31,6 +33,8 @@ function modelToClient(row: ModelRow) {
     baseUrl: row.baseUrl,
     model: row.model,
     enabled: Boolean(row.enabled),
+    logoImageId: row.logoImageId == null ? null : Number(row.logoImageId),
+    logoUrl: row.logoImageId == null ? null : `/api/ai/model-images/${Number(row.logoImageId)}`,
     apiKeySet: Boolean(key),
     apiKeyPreview: key ? key.slice(0, 4) + '••••••••' + key.slice(-4) : '',
   };
@@ -68,7 +72,9 @@ async function requireAdmin() {
 
 async function readState() {
   const settings = await query<RowDataPacket[]>('SELECT active_config_id AS activeConfigId, active_prompt_id AS activePromptId, auto_transcribe AS autoTranscribe FROM ai_settings WHERE id = 1 LIMIT 1');
-  const configs = await query<ModelRow[]>('SELECT id, name, provider, base_url AS baseUrl, model, api_key AS apiKey, enabled FROM ai_model_configs ORDER BY id ASC');
+  const configs = await query<ModelRow[]>(`SELECT c.id, c.name, c.provider, c.base_url AS baseUrl, c.model, c.api_key AS apiKey, c.enabled,
+    c.logo_image_id AS logoImageId, i.filename AS logoFilename
+    FROM ai_model_configs c LEFT JOIN ai_model_images i ON i.id = c.logo_image_id ORDER BY c.id ASC`);
   const prompts = await query<PromptRow[]>('SELECT id, name, content FROM ai_prompts ORDER BY id ASC');
   const asrRows = await query<AsrRow[]>('SELECT provider, submit_url AS submitUrl, task_url AS taskUrl, model, api_key AS apiKey, public_base_url AS publicBaseUrl, token_secret AS tokenSecret FROM asr_settings WHERE id = 1 LIMIT 1');
   const activeConfigId = Number(settings[0]?.activeConfigId || configs.find((item) => Boolean(item.enabled))?.id || 0);
@@ -97,7 +103,7 @@ export async function PATCH(request: Request) {
       activeConfigId?: number;
       activePromptId?: number;
       autoTranscribe?: boolean;
-      config?: { id?: number; name?: string; provider?: string; baseUrl?: string; model?: string; apiKey?: string; enabled?: boolean };
+      config?: { id?: number; name?: string; provider?: string; baseUrl?: string; model?: string; apiKey?: string; enabled?: boolean; logoImageId?: number | null };
       prompt?: { id?: number; name?: string; content?: string };
       asrConfig?: { provider?: string; submitUrl?: string; taskUrl?: string; model?: string; apiKey?: string; publicBaseUrl?: string; tokenSecret?: string };
       deleteConfigId?: number;
@@ -137,16 +143,23 @@ export async function PATCH(request: Request) {
       const baseUrl = String(body.config.baseUrl || '').trim().replace(/\/+$/, '');
       const model = String(body.config.model || '').trim().slice(0, 150);
       const key = String(body.config.apiKey || '').trim();
+      const hasLogoImage = Object.prototype.hasOwnProperty.call(body.config, 'logoImageId');
+      const logoImageId = body.config.logoImageId == null ? null : Number(body.config.logoImageId);
+      if (hasLogoImage && logoImageId !== null) {
+        if (!Number.isSafeInteger(logoImageId) || logoImageId <= 0) return Response.json({ error: '模型图标无效。' }, { status: 400 });
+        const imageRows = await query<RowDataPacket[]>('SELECT id FROM ai_model_images WHERE id=? LIMIT 1', [logoImageId]);
+        if (!imageRows.length) return Response.json({ error: '所选模型图标不存在，请重新上传或选择。' }, { status: 400 });
+      }
       if (!name || !provider || !baseUrl || !model) return Response.json({ error: '模型配置的名称、平台、接口地址和模型名称不能为空' }, { status: 400 });
       if (Number(body.config.id) > 0) {
         if (key) {
-          await execute('UPDATE ai_model_configs SET name = ?, provider = ?, base_url = ?, model = ?, api_key = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [name, provider, baseUrl, model, key, body.config.enabled === false ? 0 : 1, Number(body.config.id)]);
+          await execute(`UPDATE ai_model_configs SET name=?, provider=?, base_url=?, model=?, api_key=?, enabled=?, logo_image_id=CASE WHEN ? THEN ? ELSE logo_image_id END, updated_at=CURRENT_TIMESTAMP WHERE id=?`, [name, provider, baseUrl, model, key, body.config.enabled === false ? 0 : 1, hasLogoImage ? 1 : 0, logoImageId, Number(body.config.id)]);
         } else {
-          await execute('UPDATE ai_model_configs SET name = ?, provider = ?, base_url = ?, model = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [name, provider, baseUrl, model, body.config.enabled === false ? 0 : 1, Number(body.config.id)]);
+          await execute(`UPDATE ai_model_configs SET name=?, provider=?, base_url=?, model=?, enabled=?, logo_image_id=CASE WHEN ? THEN ? ELSE logo_image_id END, updated_at=CURRENT_TIMESTAMP WHERE id=?`, [name, provider, baseUrl, model, body.config.enabled === false ? 0 : 1, hasLogoImage ? 1 : 0, logoImageId, Number(body.config.id)]);
         }
         configId = Number(body.config.id);
       } else {
-        const result = await execute('INSERT INTO ai_model_configs (name, provider, base_url, model, api_key, enabled) VALUES (?, ?, ?, ?, ?, ?)', [name, provider, baseUrl, model, key || null, body.config.enabled === false ? 0 : 1]);
+        const result = await execute('INSERT INTO ai_model_configs (name, provider, base_url, model, api_key, enabled, logo_image_id) VALUES (?, ?, ?, ?, ?, ?, ?)', [name, provider, baseUrl, model, key || null, body.config.enabled === false ? 0 : 1, hasLogoImage ? logoImageId : null]);
         configId = Number(result.insertId);
       }
     }

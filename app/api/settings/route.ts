@@ -14,7 +14,7 @@ export async function GET() {
     const selectedVoiceId = row?.defaultVoiceId == null || !previewIds.has(Number(row.defaultVoiceId)) ? null : Number(row.defaultVoiceId);
     const aiRows = await query('SELECT auto_transcribe AS autoTranscribe FROM ai_settings WHERE id = 1 LIMIT 1');
     const autoTranscribe = Boolean((aiRows[0] as { autoTranscribe?: number } | undefined)?.autoTranscribe);
-    const aiConfigRows = await query('SELECT id, name FROM ai_model_configs WHERE enabled=1 ORDER BY id ASC');
+    const aiConfigRows = await query('SELECT id, name, logo_image_id AS logoImageId FROM ai_model_configs WHERE enabled=1 ORDER BY id ASC');
     const defaultConfigRows = await query('SELECT active_config_id AS id FROM ai_settings WHERE id=1 LIMIT 1');
     const availableAiConfigIds = new Set(aiConfigRows.map((item) => Number((item as { id: number }).id)));
     const selectedAiConfigId = row?.aiConfigId != null && availableAiConfigIds.has(Number(row.aiConfigId)) ? Number(row.aiConfigId) : null;
@@ -38,7 +38,11 @@ export async function GET() {
         model: String((item as { model: string }).model || ''),
         audioUrl: `/api/question-voices/${Number((item as { id: number }).id)}/audio?kind=output`,
       })),
-      aiModelOptions: aiConfigRows.map((item) => ({ id: Number((item as { id: number }).id), name: String((item as { name: string }).name) })),
+      aiModelOptions: aiConfigRows.map((item) => {
+        const row = item as { id: number; name: string; logoImageId?: number | null };
+        const logoImageId = row.logoImageId == null ? null : Number(row.logoImageId);
+        return { id: Number(row.id), name: String(row.name), logoImageId, logoUrl: logoImageId ? `/api/ai/model-images/${logoImageId}` : null };
+      }),
     });
   } catch (error) {
     return apiError(error);

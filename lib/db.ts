@@ -158,6 +158,7 @@ const schema = [
     model VARCHAR(150) NOT NULL,
     api_key TEXT NULL,
     enabled TINYINT(1) NOT NULL DEFAULT 1,
+    logo_image_id BIGINT UNSIGNED NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE KEY uq_ai_model_config_name (name)
@@ -193,6 +194,13 @@ const schema = [
     content LONGTEXT NOT NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_ai_messages_conversation (user_id, question_id, created_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE TABLE IF NOT EXISTS ai_model_images (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    filename VARCHAR(255) NOT NULL,
+    mime VARCHAR(100) NOT NULL,
+    storage_path VARCHAR(500) NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS simulation_templates (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -575,6 +583,9 @@ async function initializeDatabase(db: Pool) {
   }
   if (!(await hasColumn(db, 'ai_model_configs', 'enabled'))) {
     await db.query('ALTER TABLE ai_model_configs ADD COLUMN enabled TINYINT(1) NOT NULL DEFAULT 1 AFTER api_key');
+  }
+  if (!(await hasColumn(db, 'ai_model_configs', 'logo_image_id'))) {
+    await db.query('ALTER TABLE ai_model_configs ADD COLUMN logo_image_id BIGINT UNSIGNED NULL AFTER enabled');
   }
   const readQuestionColumn = await columnInfo(db, 'user_settings', 'read_question');
   if (

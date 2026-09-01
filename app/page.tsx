@@ -4222,7 +4222,7 @@ function Settings({
   const [copiedBrowserUrl, setCopiedBrowserUrl] = useState(false);
   const [voicePreviews, setVoicePreviews] = useState<Array<{ id: number; name: string; provider: string; model: string; audioUrl: string }>>([]);
   const [voicePreviewLoading, setVoicePreviewLoading] = useState(true);
-  const [aiModelOptions, setAiModelOptions] = useState<Array<{ id: number; name: string }>>([]);
+  const [aiModelOptions, setAiModelOptions] = useState<Array<{ id: number; name: string; logoUrl?: string | null }>>([]);
   const [aiConfigId, setAiConfigId] = useState<number | null>(null);
   const [defaultAiConfigId, setDefaultAiConfigId] = useState(0);
   const [aiModelSaving, setAiModelSaving] = useState(false);
@@ -4407,10 +4407,11 @@ function Settings({
         </div>
         <div className="user-model-picker" role="radiogroup" aria-label="选择 AI 交互模型">
           <button type="button" role="radio" aria-checked={aiConfigId === null} className={aiConfigId === null ? "selected" : ""} disabled={aiModelSaving} onClick={() => void chooseAiModel(null)}>
-            <strong>管理员默认</strong><small>{aiModelOptions.find((item) => item.id === defaultAiConfigId)?.name || "系统默认模型"}</small>
+            {aiModelOptions.find((item) => item.id === defaultAiConfigId)?.logoUrl && <img className="user-model-logo" src={aiModelOptions.find((item) => item.id === defaultAiConfigId)?.logoUrl || undefined} alt="" />}
+            <span><strong>管理员默认</strong><small>{aiModelOptions.find((item) => item.id === defaultAiConfigId)?.name || "系统默认模型"}</small></span>
           </button>
           {aiModelOptions.map((item) => <button type="button" role="radio" aria-checked={aiConfigId === item.id} className={aiConfigId === item.id ? "selected" : ""} disabled={aiModelSaving} onClick={() => void chooseAiModel(item.id)} key={item.id}>
-            <strong>{item.name}</strong><small>{item.id === defaultAiConfigId ? "管理员默认" : "可选模型"}</small>
+            {item.logoUrl && <img className="user-model-logo" src={item.logoUrl} alt="" />}<span><strong>{item.name}</strong><small>{item.id === defaultAiConfigId ? "管理员默认" : "可选模型"}</small></span>
           </button>)}
         </div>
       </section>
@@ -6090,8 +6091,11 @@ type AiModelConfig = {
   apiKeySet: boolean;
   apiKeyPreview: string;
   enabled: boolean;
+  logoImageId?: number | null;
+  logoUrl?: string | null;
   apiKey?: string;
 };
+type AiModelImage = { id: number; filename: string; url: string };
 type AiPrompt = { id: number; name: string; content: string };
 type AsrConfigClient = {
   provider: string;
@@ -6158,12 +6162,18 @@ function AiConfig() {
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [modelImages, setModelImages] = useState<AiModelImage[]>([]);
+  const [uploadingModelImage, setUploadingModelImage] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const data = await jsonFetch("/api/ai/config");
+      const [data, images] = await Promise.all([
+        jsonFetch("/api/ai/config"),
+        jsonFetch("/api/ai/model-images"),
+      ]);
       setState(data);
       setAsrDraft(data.asrConfig);
+      setModelImages(images.images || []);
     } catch (error) {
       setMessage((error as Error).message);
     } finally {
@@ -6221,6 +6231,22 @@ function AiConfig() {
     setEditingPrompt({ ...prompt });
   }
 
+  async function uploadModelImage(file: File | null) {
+    if (!file || !editingModel) return;
+    setUploadingModelImage(true);
+    setMessage("");
+    try {
+      const form = new FormData();
+      form.append("image", file);
+      const data = await jsonFetch("/api/ai/model-images", { method: "POST", body: form });
+      const image = data.image as AiModelImage;
+      setModelImages((current) => [image, ...current]);
+      setEditingModel((current) => current ? { ...current, logoImageId: image.id, logoUrl: image.url } : current);
+      setMessage("模型图标已上传，可直接保存配置。");
+    } catch (error) { setMessage((error as Error).message); }
+    finally { setUploadingModelImage(false); }
+  }
+
   async function saveModel(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!editingModel) return;
@@ -6242,6 +6268,7 @@ function AiConfig() {
             model: editingModel.model,
             apiKey: editingModel.apiKey || "",
             enabled: editingModel.enabled,
+            logoImageId: editingModel.logoImageId ?? null,
           },
         }),
       });
@@ -6442,6 +6469,7 @@ function AiConfig() {
           </label>
           {activeModel && (
             <div className="ai-active-summary">
+              {activeModel.logoUrl && <img className="ai-model-icon-thumb" src={activeModel.logoUrl} alt="" />}
               <strong>{activeModel.name}</strong>
               <span>
                 {providerNames[activeModel.provider] || activeModel.provider} ·{" "}
@@ -6462,6 +6490,7 @@ function AiConfig() {
                 }
                 key={item.id}
               >
+                {item.logoUrl && <img className="ai-model-icon-thumb" src={item.logoUrl} alt="" />}
                 <div>
                   <strong>{item.name}</strong>
                   <span>
@@ -6606,6 +6635,27 @@ function AiConfig() {
                   }
                   autoComplete="off"
                 />
+              </label>
+              <label>
+                模型图标（可选）
+                <select
+                  value={editingModel.logoImageId == null ? "" : String(editingModel.logoImageId)}
+                  onChange={(event) => {
+                    const imageId = event.target.value ? Number(event.target.value) : null;
+                    const image = modelImages.find((item) => item.id === imageId);
+                    setEditingModel({ ...editingModel, logoImageId: imageId, logoUrl: image?.url || null });
+                  }}
+                >
+                  <option value="">不显示图标</option>
+                  {modelImages.map((image) => <option key={image.id} value={image.id}>{image.filename}</option>)}
+                </select>
+                <small>可从已上传图标中选择；旧配置不选时，前台不会显示占位。</small>
+              </label>
+              {editingModel.logoUrl && <img className="ai-model-logo-preview" src={editingModel.logoUrl} alt="当前模型图标预览" />}
+              <label className="ai-model-image-upload">
+                上传新的方形图标
+                <input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" disabled={uploadingModelImage} onChange={(event) => void uploadModelImage(event.target.files?.[0] || null)} />
+                <small>{uploadingModelImage ? "上传中…" : "支持 PNG、JPG、WebP、SVG，最大 2MB。上传后需点击保存配置。"}</small>
               </label>
               <button className="modal-submit" disabled={saving}>
                 {saving ? "保存中…" : "保存并启用配置"}
