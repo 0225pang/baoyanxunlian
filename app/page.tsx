@@ -2431,6 +2431,15 @@ function SimulationLobby({
           </article>
         ))}
       </div>
+      <aside className="simulation-process-note" aria-label="模拟流程说明">
+        <span>模拟说明</span>
+        <p>
+          各高校的面试环节与建议时长均参考往年情况整理，今年实际安排可能有所变化；如发现流程有明显不同，欢迎及时联系教务老师协助更新。
+        </p>
+        <p>
+          有希望练习的学校或模拟流程，也可以联系教务老师添加。
+        </p>
+      </aside>
       {!templates.length && (
         <div className="empty">
           <h3>暂无可用流程</h3>
