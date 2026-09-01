@@ -45,7 +45,9 @@ const schema = [
     password_hash VARCHAR(255) NOT NULL,
     display_name VARCHAR(80) NOT NULL,
     role ENUM('admin', 'student') NOT NULL DEFAULT 'student',
-    status ENUM('pending', 'active', 'rejected', 'deleted') NOT NULL DEFAULT 'active',
+    status ENUM('pending', 'active', 'rejected', 'disabled', 'deleted') NOT NULL DEFAULT 'active',
+    last_login_at DATETIME NULL,
+    last_seen_at DATETIME NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS sessions (
@@ -545,12 +547,14 @@ async function initializeDatabase(db: Pool) {
   const userStatus = await columnInfo(db, 'users', 'status');
   if (
     userStatus &&
-    (userStatus.columnType !== "enum('pending','active','rejected','deleted')" ||
+    (userStatus.columnType !== "enum('pending','active','rejected','disabled','deleted')" ||
       userStatus.isNullable !== 'NO' ||
       userStatus.columnDefault !== 'active')
   ) {
-    await db.query("ALTER TABLE users MODIFY COLUMN status ENUM('pending', 'active', 'rejected', 'deleted') NOT NULL DEFAULT 'active'");
+    await db.query("ALTER TABLE users MODIFY COLUMN status ENUM('pending', 'active', 'rejected', 'disabled', 'deleted') NOT NULL DEFAULT 'active'");
   }
+  if (!(await hasColumn(db, 'users', 'last_login_at'))) await db.query('ALTER TABLE users ADD COLUMN last_login_at DATETIME NULL AFTER status');
+  if (!(await hasColumn(db, 'users', 'last_seen_at'))) await db.query('ALTER TABLE users ADD COLUMN last_seen_at DATETIME NULL AFTER last_login_at');
   await ensureQuestionColumns(db);
   await ensurePracticeRecordColumns(db);
   await ensureAiColumns(db);

@@ -14,7 +14,7 @@ export async function currentUser(): Promise<CurrentUser | null> {
   if (!token) return null;
   const rows = await query<RowDataPacket[]>(`SELECT u.id, u.username, u.display_name AS displayName, u.role
     FROM sessions s JOIN users u ON u.id = s.user_id
-    WHERE s.token_hash = ? AND s.expires_at > NOW()`, [digest(token)]);
+    WHERE s.token_hash = ? AND s.expires_at > NOW() AND u.status = 'active'`, [digest(token)]);
   return (rows[0] as unknown as CurrentUser) || null;
 }
 

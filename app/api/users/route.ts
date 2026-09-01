@@ -10,9 +10,10 @@ export async function GET(request: Request) {
     const page = Math.max(1, Number(params.get('page') || 1));
     const pageSize = Math.min(20, Math.max(5, Number(params.get('pageSize') || 10)));
     const offset = (page - 1) * pageSize;
-    const users = await query("SELECT id, username, display_name AS displayName, role, status, created_at AS createdAt FROM users WHERE status <> 'deleted' ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END, id LIMIT ? OFFSET ?", [pageSize, offset]);
+    const users = await query("SELECT id, username, display_name AS displayName, role, status, created_at AS createdAt, DATE_FORMAT(last_login_at, '%Y-%m-%dT%H:%i:%s') AS lastLoginAt, last_seen_at >= DATE_SUB(NOW(), INTERVAL 45 SECOND) AS online FROM users WHERE status <> 'deleted' ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END, id LIMIT ? OFFSET ?", [pageSize, offset]);
     const countRows = await query("SELECT COUNT(*) AS total FROM users WHERE status <> 'deleted'");
-    return Response.json({ users, total: Number((countRows[0] as { total: number }).total), page, pageSize });
+    const onlineRows = await query("SELECT COUNT(*) AS total FROM users WHERE status = 'active' AND last_seen_at >= DATE_SUB(NOW(), INTERVAL 45 SECOND)");
+    return Response.json({ users, total: Number((countRows[0] as { total: number }).total), onlineTotal: Number((onlineRows[0] as { total: number }).total), page, pageSize });
   } catch (error) { return apiError(error); }
 }
 
@@ -40,8 +41,17 @@ export async function PATCH(request: Request) {
   try {
     const current = await requireUser();
     if (current.role !== 'admin') return Response.json({ error: '无权访问' }, { status: 403 });
-    const { userId, action } = await request.json();
+    let { userId, action } = await request.json();
+    const requestedAction = action;
+    if (action === 'disable' || action === 'enable') action = 'approve';
     if (!Number.isInteger(userId) || !['approve', 'reject'].includes(action)) return Response.json({ error: '审核参数无效' }, { status: 400 });
+    if (requestedAction === 'disable' || requestedAction === 'enable') {
+      if (userId === current.id) return Response.json({ error: '不能禁用当前登录账号' }, { status: 400 });
+      const result = await execute("UPDATE users SET status = ? WHERE id = ? AND role = 'student' AND status IN ('active', 'disabled')", [requestedAction === 'disable' ? 'disabled' : 'active', userId]);
+      if (!result.affectedRows) return Response.json({ error: '用户不存在或当前状态不可操作' }, { status: 404 });
+      if (requestedAction === 'disable') await execute('DELETE FROM sessions WHERE user_id = ?', [userId]);
+      return Response.json({ ok: true });
+    }
     const status = action === 'approve' ? 'active' : 'rejected';
     const result = await execute("UPDATE users SET status = ? WHERE id = ? AND role = 'student' AND status = 'pending'", [status, userId]);
     if (!result.affectedRows) return Response.json({ error: '申请不存在或已处理' }, { status: 404 });

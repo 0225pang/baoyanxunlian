@@ -30,7 +30,7 @@ type User = {
   displayName: string;
   role: "admin" | "student";
 };
-type ManagedUser = User & { status: "pending" | "active" | "rejected" };
+type ManagedUser = User & { status: "pending" | "active" | "rejected" | "disabled"; lastLoginAt?: string | null; online?: number };
 type Question = {
   id: number;
   typeId: number;
@@ -245,6 +245,14 @@ export default function Home() {
   const speechRunId = useRef(0);
   const questionAudio = useRef<HTMLAudioElement | null>(null);
   const audioContext = useRef<AudioContext | null>(null);
+
+  useEffect(() => {
+    if (!user) return;
+    const heartbeat = () => { void fetch('/api/auth/heartbeat', { method: 'POST', credentials: 'same-origin', keepalive: true }).catch(() => undefined); };
+    heartbeat();
+    const timer = window.setInterval(heartbeat, 20_000);
+    return () => window.clearInterval(timer);
+  }, [user]);
 
   const playCue = useCallback((kind: "countdown" | "recording", value = 0) => {
     try {
@@ -4384,6 +4392,7 @@ function Users() {
   const [page, setPage] = useState(1);
   const [jumpPage, setJumpPage] = useState("1");
   const [total, setTotal] = useState(0);
+  const [onlineTotal, setOnlineTotal] = useState(0);
   const [createOpen, setCreateOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<ManagedUser | null>(null);
   const [deleteRecords, setDeleteRecords] = useState(false);
@@ -4396,12 +4405,18 @@ function Users() {
     );
     setUsers(data.users);
     setTotal(data.total);
+    setOnlineTotal(Number(data.onlineTotal) || 0);
     setPage(data.page);
     setJumpPage(String(data.page));
   }, []);
   useEffect(() => {
     void load(1);
   }, [load]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => { void load(page).catch(() => undefined); }, 15_000);
+    return () => window.clearInterval(timer);
+  }, [load, page]);
 
   async function create(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -4433,6 +4448,14 @@ function Users() {
     } catch (error) {
       setMessage((error as Error).message);
     }
+  }
+  async function toggleLogin(item: ManagedUser) {
+    try {
+      await jsonFetch("/api/users", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId: item.id, action: item.status === "disabled" ? "enable" : "disable" }) });
+      setMessage(item.status === "disabled" ? "已恢复该用户登录" : "已禁用该用户登录");
+      setPendingDelete(null);
+      await load(page);
+    } catch (error) { setMessage((error as Error).message); }
   }
   async function remove() {
     if (!pendingDelete) return;
@@ -4522,7 +4545,7 @@ function Users() {
             <span className="section-kicker">ACCOUNT DIRECTORY</span>
             <h2>已有用户</h2>
           </div>
-          <em>共 {total} 个账号</em>
+          <em>共 {total} 个账号 · 当前 {onlineTotal} 人在线</em>
         </div>
         <div className="user-table">
           <div className="user-table-head">
@@ -4538,15 +4561,17 @@ function Users() {
                 <span className="user-avatar">
                   {item.displayName.slice(0, 1)}
                 </span>
-                <strong>{item.displayName}</strong>
+                <strong>{item.displayName}</strong><small className={item.online ? "presence online" : "presence offline"}>{item.online ? "在线" : "离线"}</small>
               </div>
-              <span className="user-username">@{item.username}</span>
+              <span className="user-username">@{item.username}<br /><small>上次登录：{item.lastLoginAt ? new Date(item.lastLoginAt).toLocaleString("zh-CN") : "从未登录"}</small></span>
               <span>{item.role === "admin" ? "管理员" : "普通用户"}</span>
               <small className={`status-${item.status}`}>
                 {item.status === "active"
                   ? "正常"
                   : item.status === "pending"
                     ? "待审核"
+                    : item.status === "disabled"
+                      ? "已禁用"
                     : "已拒绝"}
               </small>
               <div className="user-actions">
@@ -4558,7 +4583,7 @@ function Users() {
                       setDeleteRecords(false);
                     }}
                   >
-                    删除
+                    操作
                   </button>
                 )}
               </div>
@@ -4576,6 +4601,9 @@ function Users() {
                     同时删除该用户的作答记录和录音
                   </label>
                   <div>
+                    <button onClick={() => void toggleLogin(item)}>
+                      {item.status === "disabled" ? "恢复登录" : "禁用登录"}
+                    </button>
                     <button
                       onClick={() => {
                         setPendingDelete(null);
