@@ -5094,6 +5094,18 @@ function ReviewPage({
                 </span>
               </div>
             </div>
+            {latest.referenceAnswer ? (
+              <section className="review-section review-reference-answer">
+                <div className="review-section-title">
+                  <div>
+                    <span className="section-kicker">REFERENCE ANSWER</span>
+                    <h2>参考答案</h2>
+                  </div>
+                  <small>支持 Markdown 格式</small>
+                </div>
+                <MarkdownContent value={latest.referenceAnswer} className="reference-answer-content" />
+              </section>
+            ) : null}
             <section className="review-section">
               <div className="review-section-title">
                 <div>

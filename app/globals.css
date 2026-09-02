@@ -226,6 +226,7 @@ footer>span:first-child{color:var(--ink);font-weight:700}
 .review-question-card,.review-section,.review-side{border:1px solid var(--line);border-radius:7px;background:#fff;box-shadow:0 8px 24px #173d3408}
 .review-question-card{padding:26px 29px}
 .review-question-card h2{max-width:900px;margin:8px 0 14px;font:normal 26px/1.5 Georgia,serif;color:var(--ink)}
+.review-reference-answer{margin-top:20px;border-color:#eadcc9;background:linear-gradient(145deg,#fffaf2,#fff)}.review-reference-answer .review-section-title{padding-bottom:12px;border-bottom:1px solid #f0e6d7}.reference-answer-content{color:#5f5c54;line-height:1.82}.reference-answer-content>:first-child{margin-top:0}.reference-answer-content>:last-child{margin-bottom:0}.reference-answer-content h1,.reference-answer-content h2,.reference-answer-content h3{color:#6f5235}.reference-answer-content pre{overflow:auto;padding:12px;border-radius:10px;background:#f8f1e7}.reference-answer-content blockquote{margin:12px 0;padding-left:13px;border-left:3px solid #d7b98e;color:#746753}
 .review-question-meta{display:flex;gap:8px;flex-wrap:wrap}
 .review-question-meta span{padding:5px 9px;border-radius:3px;background:#f4eee8;color:#8c6a58;font-size:11px}
 .review-section{padding:24px 26px}
