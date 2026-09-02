@@ -7,12 +7,18 @@ export async function GET(request: Request) {
     const params = new URL(request.url).searchParams;
     const category = params.get('category') || '';
     const typeId = Number(params.get('typeId') || 0);
+    const questionId = Number(params.get('questionId') || 0);
     const settingsRows = await query('SELECT avoid_repeated AS avoidRepeated FROM user_settings WHERE user_id = ?', [user.id]);
     const avoidRepeated = Boolean((settingsRows[0] as { avoidRepeated?: number } | undefined)?.avoidRepeated);
 
     const conditions = ["q.status = 'active'", 't.is_active = 1'];
     const values: unknown[] = [];
-    if (Number.isInteger(typeId) && typeId > 0) {
+    if (Number.isInteger(questionId) && questionId > 0) {
+      // Continuing a recorded attempt must reopen the exact active question,
+      // and intentionally bypass the "avoid repeated" draw preference.
+      conditions.push('q.id = ?');
+      values.push(questionId);
+    } else if (Number.isInteger(typeId) && typeId > 0) {
       conditions.push('t.id = ?');
       values.push(typeId);
     }
@@ -20,7 +26,7 @@ export async function GET(request: Request) {
       conditions.push('t.name = ?');
       values.push(category);
     }
-    if (avoidRepeated) {
+    if (!questionId && avoidRepeated) {
       conditions.push('NOT EXISTS (SELECT 1 FROM practice_records practiced WHERE practiced.user_id = ? AND practiced.question_id = q.id)');
       values.push(user.id);
     }
@@ -29,7 +35,7 @@ export async function GET(request: Request) {
       + "CASE WHEN q.answer IS NULL OR TRIM(q.answer) = '' THEN 0 ELSE 1 END AS hasAnswer "
       + ", CASE WHEN t.code='literature_translation' THEN (SELECT v.id FROM question_voices v WHERE v.question_id IS NULL AND v.kind='translation_prompt' AND v.status='ready' AND v.output_path IS NOT NULL ORDER BY RAND() LIMIT 1) ELSE (SELECT v.id FROM question_voices v WHERE v.question_id=q.id AND v.kind='generated' AND v.status='ready' AND v.output_path IS NOT NULL ORDER BY RAND() LIMIT 1) END AS questionVoiceId "
       + 'FROM questions q JOIN question_types t ON t.id = q.type_id '
-      + 'WHERE ' + conditions.join(' AND ') + ' ORDER BY RAND() LIMIT 1';
+      + 'WHERE ' + conditions.join(' AND ') + (questionId ? ' LIMIT 1' : ' ORDER BY RAND() LIMIT 1');
     const rows = await query(sql, values);
     const row = rows[0];
     if (row) return Response.json({ question: { ...row, suppressBrowserRead: String(row.typeCode) === 'literature_translation', questionVoiceUrl: row.questionVoiceId ? `/api/question-voices/${Number(row.questionVoiceId)}/audio?kind=output` : null } });

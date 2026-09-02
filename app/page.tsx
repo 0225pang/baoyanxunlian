@@ -537,27 +537,27 @@ export default function Home() {
     setPage(nextPage);
   }
 
-  function continueFromRecord(item: RecordItem) {
+  async function continueFromRecord(item: RecordItem) {
     if (!item.questionId || !item.typeId) {
       setMessage("原题已不存在，无法继续作答。");
       return;
     }
     stopMedia();
-    setQuestion({
-      id: item.questionId,
-      typeId: item.typeId,
-      typeCode: "",
-      category: item.category,
-      content: item.question,
-      subcategory: item.subcategory,
-      hasAnswer: item.hasReferenceAnswer,
-    });
-    setAnswer("");
-    setAudioBlob(null);
-    setReferenceAnswer(item.referenceAnswer || null);
-    setCountdown(3);
-    setPage("answer");
-    window.scrollTo(0, 0);
+    setMessage("");
+    try {
+      // Load the question through the same endpoint as a new practice draw so
+      // TTS selection and literature-translation read suppression stay intact.
+      const data = await jsonFetch(`/api/questions/random?questionId=${encodeURIComponent(String(item.questionId))}`);
+      setQuestion(data.question);
+      setAnswer("");
+      setAudioBlob(null);
+      setReferenceAnswer(null);
+      setCountdown(3);
+      setPage("answer");
+      window.scrollTo(0, 0);
+    } catch (error) {
+      setMessage((error as Error).message);
+    }
   }
   async function save() {
     if (!question) return;
