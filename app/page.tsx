@@ -66,7 +66,7 @@ type DuplicateQuestion = Pick<BankQuestion, "id" | "typeId" | "typeName" | "cont
 };
 type DuplicateGroup = { key: string; content: string; count: number; questions: DuplicateQuestion[] };
 type ImportPreview = {
-  totalRows: number; validRows: number; willImport: number; blankRows: number;
+  totalRows: number; validRows: number; willImport: number; willUpdateAnswers?: number; updateAnswersOnly?: boolean; blankRows: number;
   duplicateExisting: { row: number; content: string }[];
   duplicateInFile: { row: number; content: string }[];
 };
@@ -2901,6 +2901,7 @@ function QuestionBank() {
   const [importTypeId, setImportTypeId] = useState("");
   const [importing, setImporting] = useState(false);
   const [importGenerateVoices, setImportGenerateVoices] = useState(true);
+  const [importUpdateAnswersOnly, setImportUpdateAnswersOnly] = useState(false);
   const [generatingImportedVoices, setGeneratingImportedVoices] = useState(false);
   const importVoiceCancelRef = useRef(false);
   const [duplicatesOpen, setDuplicatesOpen] = useState(false);
@@ -3056,6 +3057,7 @@ function QuestionBank() {
     setImporting(true);
     try {
       form.set("preview", "1");
+      if (importUpdateAnswersOnly) form.set("updateAnswersOnly", "1");
       const result = await jsonFetch("/api/question-bank", {
         method: "PUT",
         body: form,
@@ -3069,13 +3071,14 @@ function QuestionBank() {
     if (!importFile || !importTypeId) return;
     setImporting(true);
     try {
-      const form = new FormData(); form.set("typeId", importTypeId); form.set("file", importFile); form.set("confirmImportDuplicates", "1");
+      const form = new FormData(); form.set("typeId", importTypeId); form.set("file", importFile); form.set("confirmImportDuplicates", "1"); if (importUpdateAnswersOnly) form.set("updateAnswersOnly", "1");
       const result = await jsonFetch("/api/question-bank", { method: "PUT", body: form });
       setImportOpen(false); setImportPreview(null); setImportFile(null);
-      setMessage("已导入 " + result.imported + " 条题目" + (result.skipped ? "，自动跳过 " + result.skipped + " 行（含重复或空白）" : ""));
-      void pushNotification({ kind: result.errors?.length ? "warning" : "success", title: "题库导入完成", content: `已导入 ${result.imported} 条${result.skipped ? `，跳过 ${result.skipped} 行（重复或空白）` : ""}${result.errors?.length ? `，${result.errors.length} 行导入失败` : ""}。` }).catch(() => undefined);
+      const summary = importUpdateAnswersOnly ? `已更新 ${result.updatedAnswers || 0} 道已有题目的参考答案${result.skipped ? `，跳过 ${result.skipped} 行（未匹配题干或答案为空）` : ""}` : "已导入 " + result.imported + " 条题目" + (result.skipped ? "，自动跳过 " + result.skipped + " 行（含重复或空白）" : "");
+      setMessage(summary);
+      void pushNotification({ kind: result.errors?.length ? "warning" : "success", title: importUpdateAnswersOnly ? "题库参考答案更新完成" : "题库导入完成", content: `${summary}${result.errors?.length ? `，${result.errors.length} 行处理失败` : ""}。` }).catch(() => undefined);
       await load(1);
-      if (importGenerateVoices && Array.isArray(result.importedQuestionIds) && result.importedQuestionIds.length) {
+      if (!importUpdateAnswersOnly && importGenerateVoices && Array.isArray(result.importedQuestionIds) && result.importedQuestionIds.length) {
         void generateImportedQuestionVoices(result.importedQuestionIds.map((id: unknown) => Number(id)).filter(Number.isInteger));
       }
     } catch (error) { setMessage((error as Error).message); }
@@ -3120,10 +3123,10 @@ function QuestionBank() {
   }
   function closeImport() {
     if (importing) return;
-    setImportOpen(false); setImportPreview(null); setImportFile(null); setImportTypeId(""); setImportGenerateVoices(true);
+    setImportOpen(false); setImportPreview(null); setImportFile(null); setImportTypeId(""); setImportGenerateVoices(true); setImportUpdateAnswersOnly(false);
   }
   function openImport() {
-    setImportPreview(null); setImportFile(null); setImportTypeId(typeFilter || String(types[0]?.id || "")); setImportGenerateVoices(true); setImportOpen(true);
+    setImportPreview(null); setImportFile(null); setImportTypeId(typeFilter || String(types[0]?.id || "")); setImportGenerateVoices(true); setImportUpdateAnswersOnly(false); setImportOpen(true);
   }
   function previewDuplicateRows(rows: { row: number; content: string }[]) {
     return rows.slice(0, 3).map((item) => `第 ${item.row} 行：${item.content}`).join("；");
@@ -3176,13 +3179,14 @@ function QuestionBank() {
     return importing ? "正在检查…" : "检查重复并继续";
   }
   function confirmImportText() {
-    return importing ? "正在导入…" : `跳过重复，导入 ${importPreview?.willImport || 0} 条`;
+    return importing ? "正在处理…" : importUpdateAnswersOnly ? `仅更新答案 ${importPreview?.willUpdateAnswers || 0} 条` : `跳过重复，导入 ${importPreview?.willImport || 0} 条`;
   }
   function hasDuplicateRows() {
     return Boolean(importPreview && (importPreview.duplicateExisting.length || importPreview.duplicateInFile.length || importPreview.blankRows));
   }
   function importDescription() {
     if (!importPreview) return "Excel 需要包含“题目内容”列；“参考答案”“具体分类”“来源”“备注”均可选。提交后会先检查与题库、文件内部重复的题干。";
+    if (importUpdateAnswersOnly) return `预检完成：将仅更新 ${importPreview.willUpdateAnswers || 0} 道已存在题目的参考答案；不会新增题目，也不会修改题干、题型或分类。`;
     return `预检完成：将导入 ${importPreview.willImport} 条；重复或空白行会自动剔除，不影响其他题目。`;
   }
   function importPreviewRowsLabel() {
@@ -3259,7 +3263,7 @@ function QuestionBank() {
   function importPreviewCancelClick() { importConfirmCancel(); }
   function importSubmitButtonText() { return importSubmitText(); }
   function importConfirmButtonText() { return confirmImportText(); }
-  function importWarningText() { return "发现重复或空白行，以下内容会自动跳过："; }
+  function importWarningText() { return importUpdateAnswersOnly ? "以下题干已匹配现有题目，将只更新其参考答案：" : "发现重复或空白行，以下内容会自动跳过："; }
   function importCleanText() { return "未发现重复题干，可直接导入。"; }
   function importExistingText() { return `与题库已有题目重复：${importPreview?.duplicateExisting.length || 0} 行`; }
   function importFileText() { return `文件内部重复：${importPreview?.duplicateInFile.length || 0} 行`; }
@@ -3553,12 +3557,24 @@ function QuestionBank() {
             <label className="import-voice-option">
               <input
                 type="checkbox"
+                checked={importUpdateAnswersOnly}
+                disabled={importing || Boolean(importPreview)}
+                onChange={(event) => { setImportUpdateAnswersOnly(event.target.checked); setImportPreview(null); }}
+              />
+              <span>
+                仅更新已有题目的参考答案
+                <small>按题干匹配；只更新 Excel 中非空的“参考答案”列，不新增题目，也不改动题型、分类和题干。</small>
+              </span>
+            </label>
+            <label className="import-voice-option">
+              <input
+                type="checkbox"
                 checked={importGenerateVoices}
                 disabled
               />
               <span>
                 导入后按“设置声音试听”中的全部音色自动生成题目配音
-                <small>采用单条串行队列，可随时停止；未生成试听音色时会只导入题目，不会阻塞导入。</small>
+                <small>{importUpdateAnswersOnly ? "仅更新答案模式不会生成配音。" : "采用单条串行队列，可随时停止；未生成试听音色时会只导入题目，不会阻塞导入。"}</small>
               </span>
             </label>
             {useImportPreview() && (

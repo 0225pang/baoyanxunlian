@@ -32,8 +32,13 @@ async function questionIdWithContent(content: string, excludeId?: number) {
 }
 
 async function existingContentKeys() {
-  const rows = await query<RowDataPacket[]>('SELECT content FROM questions');
-  return new Set(rows.map((row) => normalizedContent(row.content)).filter(Boolean));
+  const rows = await query<RowDataPacket[]>('SELECT id, content FROM questions');
+  const entries: Array<[string, number]> = [];
+  for (const row of rows) {
+    const key = normalizedContent(row.content); const id = Number(row.id);
+    if (key && Number.isInteger(id) && id > 0) entries.push([key, id]);
+  }
+  return new Map<string, number>(entries);
 }
 
 async function parseImportCandidates(file: File): Promise<{ candidates: ImportCandidate[]; totalRows: number; blankRows: number }> {
@@ -179,6 +184,7 @@ export async function PUT(request: Request) {
     if (!(file instanceof File) || !file.size) return Response.json({ error: '请选择 Excel 文件' }, { status: 400 });
     if (file.size > 10 * 1024 * 1024) return Response.json({ error: 'Excel 文件不能超过 10MB' }, { status: 400 });
     const parsed = await parseImportCandidates(file);
+    const updateAnswersOnly = String(form.get('updateAnswersOnly')) === '1';
     const existing = await existingContentKeys(); const inFile = new Set<string>();
     const duplicateExisting: { row: number; content: string }[] = []; const duplicateInFile: { row: number; content: string }[] = [];
     const importable = parsed.candidates.filter((candidate) => {
@@ -187,22 +193,38 @@ export async function PUT(request: Request) {
       if (inFile.has(key)) { duplicateInFile.push({ row: candidate.row, content: candidate.content }); return false; }
       inFile.add(key); return true;
     });
+    const updateKeys = new Set<string>();
+    const updateCandidates = parsed.candidates.filter((candidate) => {
+      const key = normalizedContent(candidate.content);
+      if (updateKeys.has(key)) return false;
+      updateKeys.add(key);
+      return true;
+    });
+    const answerUpdates = updateCandidates.filter((candidate) => existing.has(normalizedContent(candidate.content)) && Boolean(candidate.answer.trim()));
     if (String(form.get('preview')) === '1') {
-      return Response.json({ preview: true, totalRows: parsed.totalRows, validRows: parsed.candidates.length, willImport: importable.length, blankRows: parsed.blankRows, duplicateExisting, duplicateInFile });
+      return Response.json({ preview: true, updateAnswersOnly, totalRows: parsed.totalRows, validRows: parsed.candidates.length, willImport: updateAnswersOnly ? 0 : importable.length, willUpdateAnswers: updateAnswersOnly ? answerUpdates.length : 0, blankRows: parsed.blankRows, duplicateExisting, duplicateInFile });
     }
     if (String(form.get('confirmImportDuplicates')) !== '1') return Response.json({ error: '请先完成导入预检确认。' }, { status: 400 });
-    let imported = 0; let skipped = parsed.blankRows + duplicateExisting.length + duplicateInFile.length; const errors: string[] = []; const importedQuestionIds: number[] = [];
+    let imported = 0; let updatedAnswers = 0; let skipped = parsed.blankRows + duplicateInFile.length + (updateAnswersOnly ? 0 : duplicateExisting.length); const errors: string[] = []; const importedQuestionIds: number[] = [];
     const currentExisting = await existingContentKeys();
-    for (const candidate of importable) {
+    const candidatesToProcess = updateAnswersOnly ? updateCandidates : importable;
+    for (const candidate of candidatesToProcess) {
       const key = normalizedContent(candidate.content);
-      if (currentExisting.has(key)) { skipped += 1; continue; }
+      const existingId = currentExisting.get(key);
+      if (updateAnswersOnly) {
+        if (!existingId || !candidate.answer.trim()) { skipped += 1; continue; }
+        try { await execute('UPDATE questions SET answer = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [candidate.answer.trim(), existingId]); updatedAnswers += 1; }
+        catch (error) { errors.push(`第 ${candidate.row} 行：${String(error)}`); }
+        continue;
+      }
+      if (existingId) { skipped += 1; continue; }
       try {
         const created = await execute('INSERT INTO questions (type_id, content, answer, subcategory, extra, status) VALUES (?, ?, ?, ?, ?, ?)', [typeId, candidate.content, candidate.answer || null, candidate.subcategory || null, candidate.extra, 'active']);
-        currentExisting.add(key);
+        currentExisting.set(key, Number(created.insertId));
         imported += 1;
         importedQuestionIds.push(Number(created.insertId));
       } catch (error) { errors.push(`第 ${candidate.row} 行：${String(error)}`); }
     }
-    return Response.json({ imported, importedQuestionIds, skipped, errors: errors.slice(0, 20), totalRows: parsed.totalRows, duplicateExisting: duplicateExisting.length, duplicateInFile: duplicateInFile.length });
+    return Response.json({ imported, updatedAnswers, importedQuestionIds, skipped, errors: errors.slice(0, 20), totalRows: parsed.totalRows, duplicateExisting: duplicateExisting.length, duplicateInFile: duplicateInFile.length });
   } catch (error) { return apiError(error); }
 }
