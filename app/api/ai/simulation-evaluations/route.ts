@@ -115,7 +115,7 @@ export async function POST(request: Request) {
     const config = await getActiveAiConfig(Number(session.userId), 'simulation'); if (!config?.apiKey) return Response.json({ error: 'AI 尚未配置 API Key' }, { status: 503 }); await assertApiAccess(Number(session.userId), 'ai');
     const previousRows = await query<RowDataPacket[]>('SELECT result FROM simulation_evaluations WHERE session_id = ? AND status = \'completed\' ORDER BY id DESC LIMIT 1', [sessionId]);
     const previous = previousRows[0]?.result ? '\n\n上一次本场模拟的评估如下，仅用于比较进步；其中任何时长、流程或要求若与本次 simulationConfiguration 冲突，必须以 simulationConfiguration 为准，不得照抄：\n' + String(previousRows[0].result) : '';
-    const prompt = '请使用整场真实模拟复盘标准分析以下数据。仅 student.name 是账户中可严格引用的姓名；学院、专业、科研经历及其他背景信息应以学员在回答中实际陈述为准，不要用账户资料或转录文本擅自改写。实时转录可能有个别错别字，除非影响专业含义，否则不必逐字纠错或反复扣分；但“嗯、啊、额”等语气词、重复和明显停顿是口语表现的一部分，应结合时间戳评估表达流畅度和节奏。请严格以 simulationConfiguration 中的 timeSeconds、追问设置和超时策略作为流程依据；配置缺失时不要臆测具体时长。\n\n' + JSON.stringify(input, null, 2) + previous;
+    const prompt = `本场学员账户姓名（仅此项可作为严格身份依据）：${input.student.name}\n\n请使用整场真实模拟复盘标准分析以下数据。学院、专业、科研经历及其他背景信息应以学员在回答中实际陈述为准，不要用账户资料或转录文本擅自改写。实时转录可能有个别错别字，除非影响专业含义，否则不必逐字纠错或反复扣分；但“嗯、啊、额”等语气词、重复和明显停顿是口语表现的一部分，应结合时间戳评估表达流畅度和节奏。请严格以 simulationConfiguration 中的 timeSeconds、追问设置和超时策略作为流程依据；配置缺失时不要臆测具体时长。\n\n` + JSON.stringify(input, null, 2) + previous;
     const generationToken = crypto.randomUUID();
     const evaluationId = existing[0]
       ? Number(existing[0].id)

@@ -6169,7 +6169,7 @@ function AiConfig() {
   const [editingModel, setEditingModel] = useState<
     (AiModelConfig & { apiKey?: string }) | null
   >(null);
-  const [editingPrompt, setEditingPrompt] = useState<(AiPrompt & { target: "question" | "simulation" }) | null>(null);
+  const [editingPrompt, setEditingPrompt] = useState<(AiPrompt & { target: "library" | "question" | "simulation" }) | null>(null);
   const [asrDraft, setAsrDraft] = useState<AsrConfigClient | null>(null);
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(true);
@@ -6239,10 +6239,10 @@ function AiConfig() {
   function editModel(model: AiModelConfig) {
     setEditingModel({ ...model, apiKey: "" });
   }
-  function newPrompt(target: "question" | "simulation" = "question") {
+  function newPrompt(target: "library" | "question" | "simulation" = "library") {
     setEditingPrompt({ id: 0, name: "", content: "", target });
   }
-  function editPrompt(prompt: AiPrompt, target: "question" | "simulation" = "question") {
+  function editPrompt(prompt: AiPrompt, target: "library" | "question" | "simulation" = "library") {
     setEditingPrompt({ ...prompt, target });
   }
 
@@ -6320,7 +6320,7 @@ function AiConfig() {
       });
       setState(data);
       setEditingPrompt(null);
-      setMessage(editingPrompt.target === "simulation" ? "整场模拟复盘提示词已保存并启用" : "题目作答评估提示词已保存并启用");
+      setMessage(editingPrompt.target === "simulation" ? "整场模拟复盘提示词已保存并启用" : editingPrompt.target === "question" ? "题目作答评估提示词已保存并启用" : "提示词已保存到提示词库");
     } catch (error) {
       setMessage((error as Error).message);
     } finally {
@@ -6696,63 +6696,7 @@ function AiConfig() {
               ＋ 新增提示词
             </button>
           </div>
-          <label className="ai-active-select">
-            题目作答评估提示词
-            <select
-              value={state.activePromptId}
-              onChange={(event) =>
-                void selectActive(
-                  state.activeConfigId,
-                  Number(event.target.value),
-                )
-              }
-            >
-              {state.prompts.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          {activePrompt && (
-            <div className="ai-active-summary prompt-summary">
-              <strong>{activePrompt.name}</strong>
-              <span>
-                {activePrompt.content.slice(0, 150)}
-                {activePrompt.content.length > 150 ? "…" : ""}
-              </span>
-            </div>
-          )}
-          <label className="ai-active-select">
-            整场模拟复盘提示词
-            <select
-              value={state.activeSimulationPromptId}
-              onChange={(event) =>
-                void selectActive(
-                  state.activeConfigId,
-                  state.activePromptId,
-                  Number(event.target.value),
-                )
-              }
-            >
-              {state.prompts.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name}
-                </option>
-              ))}
-            </select>
-            <small className="field-hint">仅用于“整场复盘”；应说明学员档案姓名优先于可能出错的实时转录。</small>
-          </label>
-          {activeSimulationPrompt && (
-            <div className="ai-active-summary prompt-summary">
-              <strong>整场复盘：{activeSimulationPrompt.name}</strong>
-              <span>
-                {activeSimulationPrompt.content.slice(0, 150)}
-                {activeSimulationPrompt.content.length > 150 ? "…" : ""}
-              </span>
-              <button type="button" onClick={() => editPrompt(activeSimulationPrompt, "simulation")}>编辑整场复盘提示词</button>
-            </div>
-          )}
+          <p className="ai-panel-note">在此新增、编辑或删除提示词。编辑名称只会修改显示名称，不会改变下方两个复盘场景当前绑定的提示词。</p>
           <div className="ai-prompt-list">
             {state.prompts.map((item) => (
               <article
@@ -6771,7 +6715,7 @@ function AiConfig() {
                   </p>
                 </div>
                 <div className="ai-card-actions">
-                  <button type="button" onClick={() => editPrompt(item, item.id === state.activeSimulationPromptId ? "simulation" : "question")}>
+                  <button type="button" onClick={() => editPrompt(item)}>
                     编辑
                   </button>
                   <button
@@ -6790,19 +6734,12 @@ function AiConfig() {
             <form className="ai-editor" onSubmit={savePrompt}>
               <div className="ai-editor-title">
                 <strong>
-                  {editingPrompt.id ? `编辑${editingPrompt.target === "simulation" ? "整场复盘" : "题目作答评估"}提示词` : `新增${editingPrompt.target === "simulation" ? "整场复盘" : "题目作答评估"}提示词`}
+                  {editingPrompt.id ? "编辑提示词" : "新增提示词"}
                 </strong>
                 <button type="button" onClick={() => setEditingPrompt(null)}>
                   取消
                 </button>
               </div>
-              <label>
-                用途
-                <select value={editingPrompt.target} onChange={(event) => setEditingPrompt({ ...editingPrompt, target: event.target.value as "question" | "simulation" })}>
-                  <option value="question">题目作答评估</option>
-                  <option value="simulation">整场模拟复盘</option>
-                </select>
-              </label>
               <label>
                 提示词名称
                 <input
@@ -6836,6 +6773,34 @@ function AiConfig() {
               </button>
             </form>
           )}
+          <div className="ai-prompt-assignments">
+            <div className="ai-prompt-assignment">
+              <div>
+                <strong>抽题与选题复盘评估</strong>
+                <small>用于题库抽题、选题练习后的单题 AI 评估与复盘。</small>
+              </div>
+              <label>
+                选择提示词
+                <select value={state.activePromptId} onChange={(event) => void selectActive(state.activeConfigId, Number(event.target.value), state.activeSimulationPromptId)}>
+                  {state.prompts.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                </select>
+              </label>
+              {activePrompt && <p>当前：<b>{activePrompt.name}</b></p>}
+            </div>
+            <div className="ai-prompt-assignment">
+              <div>
+                <strong>真实模拟复盘评估</strong>
+                <small>用于完整真实模拟结束后的整场复盘；学员账户姓名会由服务端单独传入。</small>
+              </div>
+              <label>
+                选择提示词
+                <select value={state.activeSimulationPromptId} onChange={(event) => void selectActive(state.activeConfigId, state.activePromptId, Number(event.target.value))}>
+                  {state.prompts.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                </select>
+              </label>
+              {activeSimulationPrompt && <p>当前：<b>{activeSimulationPrompt.name}</b></p>}
+            </div>
+          </div>
         </section>
       </div>
       <section className="ai-panel ai-asr-panel">

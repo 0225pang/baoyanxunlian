@@ -108,7 +108,7 @@ export async function PATCH(request: Request) {
       autoTranscribe?: boolean;
       config?: { id?: number; name?: string; provider?: string; baseUrl?: string; model?: string; apiKey?: string; enabled?: boolean; logoImageId?: number | null };
       prompt?: { id?: number; name?: string; content?: string };
-      promptTarget?: 'question' | 'simulation';
+      promptTarget?: 'library' | 'question' | 'simulation';
       asrConfig?: { provider?: string; submitUrl?: string; taskUrl?: string; model?: string; apiKey?: string; publicBaseUrl?: string; tokenSecret?: string };
       deleteConfigId?: number;
       toggleConfigId?: number;
@@ -177,11 +177,11 @@ export async function PATCH(request: Request) {
       if (Number(body.prompt.id) > 0) {
         await execute('UPDATE ai_prompts SET name = ?, content = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [name, content, Number(body.prompt.id)]);
         if (body.promptTarget === 'simulation') simulationPromptId = Number(body.prompt.id);
-        else promptId = Number(body.prompt.id);
+        else if (body.promptTarget === 'question') promptId = Number(body.prompt.id);
       } else {
         const result = await execute('INSERT INTO ai_prompts (name, content) VALUES (?, ?)', [name, content]);
         if (body.promptTarget === 'simulation') simulationPromptId = Number(result.insertId);
-        else promptId = Number(result.insertId);
+        else if (body.promptTarget === 'question') promptId = Number(result.insertId);
       }
     }
 
