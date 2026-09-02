@@ -2900,7 +2900,7 @@ function QuestionBank() {
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importTypeId, setImportTypeId] = useState("");
   const [importing, setImporting] = useState(false);
-  const [importGenerateVoices, setImportGenerateVoices] = useState(false);
+  const [importGenerateVoices, setImportGenerateVoices] = useState(true);
   const [generatingImportedVoices, setGeneratingImportedVoices] = useState(false);
   const importVoiceCancelRef = useRef(false);
   const [duplicatesOpen, setDuplicatesOpen] = useState(false);
@@ -2982,6 +2982,9 @@ function QuestionBank() {
       });
       setEditor(null);
       setMessage("题目已保存");
+      if (!editor.id && Number.isInteger(Number(result.id)) && Number(result.id) > 0) {
+        void generateImportedQuestionVoices([Number(result.id)]);
+      }
       const regeneration = result.voiceRegeneration;
       if (regeneration?.found) {
         const text = `题目已保存；已按原配置重生成 ${regeneration.generated || 0}/${regeneration.found} 条配音${regeneration.failed ? `，${regeneration.failed} 条失败，请在题目语音管理查看原因` : ''}。`;
@@ -3117,10 +3120,10 @@ function QuestionBank() {
   }
   function closeImport() {
     if (importing) return;
-    setImportOpen(false); setImportPreview(null); setImportFile(null); setImportTypeId(""); setImportGenerateVoices(false);
+    setImportOpen(false); setImportPreview(null); setImportFile(null); setImportTypeId(""); setImportGenerateVoices(true);
   }
   function openImport() {
-    setImportPreview(null); setImportFile(null); setImportTypeId(typeFilter || String(types[0]?.id || "")); setImportGenerateVoices(false); setImportOpen(true);
+    setImportPreview(null); setImportFile(null); setImportTypeId(typeFilter || String(types[0]?.id || "")); setImportGenerateVoices(true); setImportOpen(true);
   }
   function previewDuplicateRows(rows: { row: number; content: string }[]) {
     return rows.slice(0, 3).map((item) => `第 ${item.row} 行：${item.content}`).join("；");
@@ -3551,8 +3554,7 @@ function QuestionBank() {
               <input
                 type="checkbox"
                 checked={importGenerateVoices}
-                disabled={importing}
-                onChange={(event) => setImportGenerateVoices(event.target.checked)}
+                disabled
               />
               <span>
                 导入后按“设置声音试听”中的全部音色自动生成题目配音

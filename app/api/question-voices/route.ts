@@ -79,9 +79,13 @@ export async function POST(request: Request) {
     const voiceId = fromSettingsPreview ? clean(source.voiceId, 255) : provider === 'baidu' ? clean(body.voiceId, 255) : model.startsWith('sambert-') ? '' : clean(body.voiceId, 255);
     if ((!isGlobalPreview && (!Number.isInteger(questionId) || questionId < 1)) || (provider === 'bailian' && !model.startsWith('sambert-') && !voiceId)) return Response.json({ error: isGlobalPreview ? (model.startsWith('sambert-') ? '请选择有效的 Sambert 模型。' : '请选择要使用的复刻 voice ID。') : provider === 'baidu' ? '请选择有效题目。' : model.startsWith('sambert-') ? '请选择有效的 Sambert 模型。' : '请选择要使用的复刻 voice ID。' }, { status: 400 });
     const text = clean(body.text, 1000);
-    const questions = isGlobalPreview ? [] : await query<RowDataPacket[]>('SELECT content FROM questions WHERE id=? LIMIT 1', [questionId]);
+    const questions = isGlobalPreview ? [] : await query<RowDataPacket[]>(`SELECT q.content, t.code AS typeCode
+      FROM questions q LEFT JOIN question_types t ON t.id = q.type_id WHERE q.id=? LIMIT 1`, [questionId]);
     const question = questions[0];
     if (!isGlobalPreview && !question) return Response.json({ error: '所选题目不存在。' }, { status: 404 });
+    // Literature-translation questions use the configurable unified prompt
+    // audio rather than reading the English question text aloud.
+    if (!isGlobalPreview && String(question.typeCode || '') === 'literature_translation') return Response.json({ skipped: true, reason: 'literature_translation', state: await readState() });
     if (isGlobalPreview && !text) return Response.json({ error: isTranslationPrompt ? '文献翻译提示语不能为空。' : '试听文本不能为空。' }, { status: 400 });
     const parameters = fromSettingsPreview ? parseParameters(source.parameters) : body.parameters && typeof body.parameters === 'object' ? body.parameters : {};
     if (fromSettingsPreview) delete (parameters as Record<string, unknown>).text;
