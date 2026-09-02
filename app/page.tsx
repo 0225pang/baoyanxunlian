@@ -6125,6 +6125,7 @@ type AiConfigState = {
   prompts: AiPrompt[];
   activeConfigId: number;
   activePromptId: number;
+  activeSimulationPromptId: number;
   autoTranscribe: boolean;
   asrConfig: AsrConfigClient | null;
 };
@@ -6161,13 +6162,14 @@ function AiConfig() {
     prompts: [],
     activeConfigId: 0,
     activePromptId: 0,
+    activeSimulationPromptId: 0,
     autoTranscribe: false,
     asrConfig: null,
   });
   const [editingModel, setEditingModel] = useState<
     (AiModelConfig & { apiKey?: string }) | null
   >(null);
-  const [editingPrompt, setEditingPrompt] = useState<AiPrompt | null>(null);
+  const [editingPrompt, setEditingPrompt] = useState<(AiPrompt & { target: "question" | "simulation" }) | null>(null);
   const [asrDraft, setAsrDraft] = useState<AsrConfigClient | null>(null);
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(true);
@@ -6212,6 +6214,9 @@ function AiConfig() {
   const activePrompt =
     state.prompts.find((item) => item.id === state.activePromptId) ||
     state.prompts[0];
+  const activeSimulationPrompt =
+    state.prompts.find((item) => item.id === state.activeSimulationPromptId) ||
+    state.prompts[0];
   const providerModelOptions =
     modelPresets[editingModel?.provider || "custom"] || [];
   const currentModelIsPreset = Boolean(
@@ -6234,11 +6239,11 @@ function AiConfig() {
   function editModel(model: AiModelConfig) {
     setEditingModel({ ...model, apiKey: "" });
   }
-  function newPrompt() {
-    setEditingPrompt({ id: 0, name: "", content: "" });
+  function newPrompt(target: "question" | "simulation" = "question") {
+    setEditingPrompt({ id: 0, name: "", content: "", target });
   }
-  function editPrompt(prompt: AiPrompt) {
-    setEditingPrompt({ ...prompt });
+  function editPrompt(prompt: AiPrompt, target: "question" | "simulation" = "question") {
+    setEditingPrompt({ ...prompt, target });
   }
 
   async function uploadModelImage(file: File | null) {
@@ -6303,7 +6308,9 @@ function AiConfig() {
         body: JSON.stringify({
           activeConfigId: state.activeConfigId,
           activePromptId: editingPrompt.id || state.activePromptId,
+          activeSimulationPromptId: editingPrompt.target === "simulation" ? (editingPrompt.id || state.activeSimulationPromptId) : state.activeSimulationPromptId,
           autoTranscribe: state.autoTranscribe,
+          promptTarget: editingPrompt.target,
           prompt: {
             id: editingPrompt.id || undefined,
             name: editingPrompt.name,
@@ -6313,7 +6320,7 @@ function AiConfig() {
       });
       setState(data);
       setEditingPrompt(null);
-      setMessage("提示词已保存并设为当前提示词");
+      setMessage(editingPrompt.target === "simulation" ? "整场模拟复盘提示词已保存并启用" : "题目作答评估提示词已保存并启用");
     } catch (error) {
       setMessage((error as Error).message);
     } finally {
@@ -6323,6 +6330,7 @@ function AiConfig() {
   async function selectActive(
     configId: number,
     promptId = state.activePromptId,
+    simulationPromptId = state.activeSimulationPromptId,
   ) {
     try {
       const data = await jsonFetch("/api/ai/config", {
@@ -6331,6 +6339,7 @@ function AiConfig() {
         body: JSON.stringify({
           activeConfigId: configId,
           activePromptId: promptId,
+          activeSimulationPromptId: simulationPromptId,
           autoTranscribe: state.autoTranscribe,
         }),
       });
@@ -6682,13 +6691,13 @@ function AiConfig() {
             <button
               type="button"
               className="create-trigger small-trigger"
-              onClick={newPrompt}
+              onClick={() => newPrompt()}
             >
               ＋ 新增提示词
             </button>
           </div>
           <label className="ai-active-select">
-            当前使用的提示词
+            题目作答评估提示词
             <select
               value={state.activePromptId}
               onChange={(event) =>
@@ -6714,6 +6723,36 @@ function AiConfig() {
               </span>
             </div>
           )}
+          <label className="ai-active-select">
+            整场模拟复盘提示词
+            <select
+              value={state.activeSimulationPromptId}
+              onChange={(event) =>
+                void selectActive(
+                  state.activeConfigId,
+                  state.activePromptId,
+                  Number(event.target.value),
+                )
+              }
+            >
+              {state.prompts.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+            <small className="field-hint">仅用于“整场复盘”；应说明学员档案姓名优先于可能出错的实时转录。</small>
+          </label>
+          {activeSimulationPrompt && (
+            <div className="ai-active-summary prompt-summary">
+              <strong>整场复盘：{activeSimulationPrompt.name}</strong>
+              <span>
+                {activeSimulationPrompt.content.slice(0, 150)}
+                {activeSimulationPrompt.content.length > 150 ? "…" : ""}
+              </span>
+              <button type="button" onClick={() => editPrompt(activeSimulationPrompt, "simulation")}>编辑整场复盘提示词</button>
+            </div>
+          )}
           <div className="ai-prompt-list">
             {state.prompts.map((item) => (
               <article
@@ -6732,13 +6771,13 @@ function AiConfig() {
                   </p>
                 </div>
                 <div className="ai-card-actions">
-                  <button type="button" onClick={() => editPrompt(item)}>
+                  <button type="button" onClick={() => editPrompt(item, item.id === state.activeSimulationPromptId ? "simulation" : "question")}>
                     编辑
                   </button>
                   <button
                     type="button"
                     className="danger-text"
-                    disabled={item.id === state.activePromptId}
+                    disabled={item.id === state.activePromptId || item.id === state.activeSimulationPromptId}
                     onClick={() => void removePrompt(item.id)}
                   >
                     删除
@@ -6751,12 +6790,19 @@ function AiConfig() {
             <form className="ai-editor" onSubmit={savePrompt}>
               <div className="ai-editor-title">
                 <strong>
-                  {editingPrompt.id ? "编辑提示词" : "新增提示词"}
+                  {editingPrompt.id ? `编辑${editingPrompt.target === "simulation" ? "整场复盘" : "题目作答评估"}提示词` : `新增${editingPrompt.target === "simulation" ? "整场复盘" : "题目作答评估"}提示词`}
                 </strong>
                 <button type="button" onClick={() => setEditingPrompt(null)}>
                   取消
                 </button>
               </div>
+              <label>
+                用途
+                <select value={editingPrompt.target} onChange={(event) => setEditingPrompt({ ...editingPrompt, target: event.target.value as "question" | "simulation" })}>
+                  <option value="question">题目作答评估</option>
+                  <option value="simulation">整场模拟复盘</option>
+                </select>
+              </label>
               <label>
                 提示词名称
                 <input

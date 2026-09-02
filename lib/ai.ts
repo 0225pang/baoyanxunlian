@@ -62,11 +62,11 @@ export function aiRequestError(status: number, raw: string) {
     : readable;
 }
 
-export async function getActiveAiConfig(userId?: number): Promise<ActiveAiConfig | null> {
+export async function getActiveAiConfig(userId?: number, promptKind: 'question' | 'simulation' = 'question'): Promise<ActiveAiConfig | null> {
   const rows = await query<RowDataPacket[]>(`SELECT
       COALESCE(user_config.id, default_config.id, fallback_config.id) AS configId,
       us.ai_config_id AS requestedConfigId,
-      COALESCE(p.id, s.active_prompt_id) AS promptId,
+      COALESCE(p.id, CASE WHEN ? = 'simulation' THEN s.active_simulation_prompt_id ELSE s.active_prompt_id END) AS promptId,
       COALESCE(user_config.provider, default_config.provider, fallback_config.provider, s.provider) AS provider,
       COALESCE(user_config.base_url, default_config.base_url, fallback_config.base_url, s.base_url) AS baseUrl,
       COALESCE(user_config.model, default_config.model, fallback_config.model, s.model) AS model,
@@ -78,8 +78,8 @@ export async function getActiveAiConfig(userId?: number): Promise<ActiveAiConfig
       LEFT JOIN ai_model_configs user_config ON user_config.id = us.ai_config_id AND user_config.enabled = 1
       LEFT JOIN ai_model_configs default_config ON default_config.id = s.active_config_id AND default_config.enabled = 1
       LEFT JOIN ai_model_configs fallback_config ON fallback_config.id = (SELECT id FROM ai_model_configs WHERE enabled = 1 ORDER BY id ASC LIMIT 1)
-      LEFT JOIN ai_prompts p ON p.id = s.active_prompt_id
-      WHERE s.id = 1 LIMIT 1`, [Number.isInteger(userId) ? userId : 0]);
+      LEFT JOIN ai_prompts p ON p.id = CASE WHEN ? = 'simulation' THEN s.active_simulation_prompt_id ELSE s.active_prompt_id END
+      WHERE s.id = 1 LIMIT 1`, [promptKind, Number.isInteger(userId) ? userId : 0, promptKind]);
   const row = rows[0];
   if (!row) return null;
   if (Number.isInteger(userId) && Number(row.requestedConfigId || 0) > 0 && Number(row.requestedConfigId) !== Number(row.configId || 0)) {

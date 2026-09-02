@@ -71,7 +71,7 @@ async function requireAdmin() {
 }
 
 async function readState() {
-  const settings = await query<RowDataPacket[]>('SELECT active_config_id AS activeConfigId, active_prompt_id AS activePromptId, auto_transcribe AS autoTranscribe FROM ai_settings WHERE id = 1 LIMIT 1');
+  const settings = await query<RowDataPacket[]>('SELECT active_config_id AS activeConfigId, active_prompt_id AS activePromptId, active_simulation_prompt_id AS activeSimulationPromptId, auto_transcribe AS autoTranscribe FROM ai_settings WHERE id = 1 LIMIT 1');
   const configs = await query<ModelRow[]>(`SELECT c.id, c.name, c.provider, c.base_url AS baseUrl, c.model, c.api_key AS apiKey, c.enabled,
     c.logo_image_id AS logoImageId, i.filename AS logoFilename
     FROM ai_model_configs c LEFT JOIN ai_model_images i ON i.id = c.logo_image_id ORDER BY c.id ASC`);
@@ -79,11 +79,13 @@ async function readState() {
   const asrRows = await query<AsrRow[]>('SELECT provider, submit_url AS submitUrl, task_url AS taskUrl, model, api_key AS apiKey, public_base_url AS publicBaseUrl, token_secret AS tokenSecret FROM asr_settings WHERE id = 1 LIMIT 1');
   const activeConfigId = Number(settings[0]?.activeConfigId || configs.find((item) => Boolean(item.enabled))?.id || 0);
   const activePromptId = Number(settings[0]?.activePromptId || prompts[0]?.id || 0);
+  const activeSimulationPromptId = Number(settings[0]?.activeSimulationPromptId || activePromptId);
   return {
     configs: configs.map(modelToClient),
     prompts: prompts.map(promptToClient),
     activeConfigId,
     activePromptId,
+    activeSimulationPromptId,
     autoTranscribe: Boolean(settings[0]?.autoTranscribe),
     asrConfig: asrRows[0] ? asrToClient(asrRows[0]) : null,
   };
@@ -102,9 +104,11 @@ export async function PATCH(request: Request) {
     const body = await request.json() as {
       activeConfigId?: number;
       activePromptId?: number;
+      activeSimulationPromptId?: number;
       autoTranscribe?: boolean;
       config?: { id?: number; name?: string; provider?: string; baseUrl?: string; model?: string; apiKey?: string; enabled?: boolean; logoImageId?: number | null };
       prompt?: { id?: number; name?: string; content?: string };
+      promptTarget?: 'question' | 'simulation';
       asrConfig?: { provider?: string; submitUrl?: string; taskUrl?: string; model?: string; apiKey?: string; publicBaseUrl?: string; tokenSecret?: string };
       deleteConfigId?: number;
       toggleConfigId?: number;
@@ -131,8 +135,8 @@ export async function PATCH(request: Request) {
       return Response.json(await readState());
     }
     if (body.deletePromptId) {
-      const active = await query<RowDataPacket[]>('SELECT active_prompt_id AS id FROM ai_settings WHERE id = 1 LIMIT 1');
-      if (Number(active[0]?.id) === Number(body.deletePromptId)) return Response.json({ error: '不能删除当前正在使用的提示词' }, { status: 400 });
+      const active = await query<RowDataPacket[]>('SELECT active_prompt_id AS activePromptId, active_simulation_prompt_id AS activeSimulationPromptId FROM ai_settings WHERE id = 1 LIMIT 1');
+      if (Number(active[0]?.activePromptId) === Number(body.deletePromptId) || Number(active[0]?.activeSimulationPromptId) === Number(body.deletePromptId)) return Response.json({ error: '不能删除当前正在使用的提示词' }, { status: 400 });
       await execute('DELETE FROM ai_prompts WHERE id = ?', [Number(body.deletePromptId)]);
     }
 
@@ -165,16 +169,19 @@ export async function PATCH(request: Request) {
     }
 
     let promptId = Number(body.activePromptId || 0);
+    let simulationPromptId = Number(body.activeSimulationPromptId || 0);
     if (body.prompt) {
       const name = String(body.prompt.name || '').trim();
       const content = String(body.prompt.content || '').trim();
       if (!name || !content) return Response.json({ error: '提示词名称和内容不能为空' }, { status: 400 });
       if (Number(body.prompt.id) > 0) {
         await execute('UPDATE ai_prompts SET name = ?, content = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [name, content, Number(body.prompt.id)]);
-        promptId = Number(body.prompt.id);
+        if (body.promptTarget === 'simulation') simulationPromptId = Number(body.prompt.id);
+        else promptId = Number(body.prompt.id);
       } else {
         const result = await execute('INSERT INTO ai_prompts (name, content) VALUES (?, ?)', [name, content]);
-        promptId = Number(result.insertId);
+        if (body.promptTarget === 'simulation') simulationPromptId = Number(result.insertId);
+        else promptId = Number(result.insertId);
       }
     }
 
@@ -201,16 +208,18 @@ export async function PATCH(request: Request) {
     const state = await readState();
     configId = configId || state.activeConfigId;
     promptId = promptId || state.activePromptId;
+    simulationPromptId = simulationPromptId || state.activeSimulationPromptId;
     const selectedConfig = state.configs.find((item) => item.id === configId && item.enabled);
     const selectedPrompt = state.prompts.find((item) => item.id === promptId);
-    if (!selectedConfig || !selectedPrompt) return Response.json({ error: '请选择有效的模型配置和提示词' }, { status: 400 });
+    const selectedSimulationPrompt = state.prompts.find((item) => item.id === simulationPromptId);
+    if (!selectedConfig || !selectedPrompt || !selectedSimulationPrompt) return Response.json({ error: '请选择有效的模型配置和提示词' }, { status: 400 });
     const selectedKeyRows = await query<RowDataPacket[]>('SELECT api_key AS apiKey FROM ai_model_configs WHERE id = ? LIMIT 1', [configId]);
     const selectedApiKey = selectedKeyRows[0]?.apiKey ? String(selectedKeyRows[0].apiKey) : null;
     const currentSettings = await query<RowDataPacket[]>('SELECT auto_transcribe AS autoTranscribe FROM ai_settings WHERE id = 1 LIMIT 1');
     const autoTranscribe = body.autoTranscribe == null ? Boolean(currentSettings[0]?.autoTranscribe) : Boolean(body.autoTranscribe);
     await execute(
-      'UPDATE ai_settings SET active_config_id = ?, active_prompt_id = ?, auto_transcribe = ?, provider = ?, base_url = ?, model = ?, api_key = ?, system_prompt = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1',
-      [configId, promptId, autoTranscribe ? 1 : 0, selectedConfig.provider, selectedConfig.baseUrl, selectedConfig.model, selectedApiKey, selectedPrompt.content],
+      'UPDATE ai_settings SET active_config_id = ?, active_prompt_id = ?, active_simulation_prompt_id = ?, auto_transcribe = ?, provider = ?, base_url = ?, model = ?, api_key = ?, system_prompt = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1',
+      [configId, promptId, simulationPromptId, autoTranscribe ? 1 : 0, selectedConfig.provider, selectedConfig.baseUrl, selectedConfig.model, selectedApiKey, selectedPrompt.content],
     );
     return Response.json(await readState());
   } catch (error) {

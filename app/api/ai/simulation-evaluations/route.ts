@@ -6,10 +6,13 @@ import { createUserNotification } from '@/lib/notifications';
 import { fetchWithAiRequestQueue } from '@/lib/ai-request-queue';
 import type { RowDataPacket } from 'mysql2/promise';
 
-type Input = { sessionId: number; templateName: string; elapsedSeconds: number; simulationConfiguration: unknown | null; configurationSource: 'session_snapshot' | 'current_template_fallback' | 'unavailable'; answers: unknown[] };
+type Input = { sessionId: number; templateName: string; student: { name: string; username: string }; elapsedSeconds: number; simulationConfiguration: unknown | null; configurationSource: 'session_snapshot' | 'current_template_fallback' | 'unavailable'; answers: unknown[] };
 
 async function sessionForUser(currentId: number, role: string, sessionId: number) {
-  const rows = await query<RowDataPacket[]>('SELECT id, user_id AS userId, template_id AS templateId, template_name AS templateName, template_config_snapshot AS templateConfigSnapshot, elapsed_seconds AS elapsedSeconds, status FROM simulation_sessions WHERE id = ? LIMIT 1', [sessionId]);
+  const rows = await query<RowDataPacket[]>(`SELECT s.id, s.user_id AS userId, s.template_id AS templateId, s.template_name AS templateName,
+    s.template_config_snapshot AS templateConfigSnapshot, s.elapsed_seconds AS elapsedSeconds, s.status,
+    u.display_name AS studentName, u.username AS studentUsername
+    FROM simulation_sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ? LIMIT 1`, [sessionId]);
   const session = rows[0];
   if (!session || (role !== 'admin' && Number(session.userId) !== currentId)) throw new Error('FORBIDDEN');
   if (String(session.status) !== 'completed') throw new Error('SIMULATION_NOT_COMPLETE');
@@ -40,7 +43,7 @@ async function buildInput(session: RowDataPacket): Promise<Input> {
       configurationSource = 'current_template_fallback';
     }
   }
-  return { sessionId: Number(session.id), templateName: String(session.templateName || ''), elapsedSeconds: Number(session.elapsedSeconds || 0), simulationConfiguration: snapshot, configurationSource, answers: answers.map((answer) => ({
+  return { sessionId: Number(session.id), templateName: String(session.templateName || ''), student: { name: String(session.studentName || session.studentUsername || '未填写'), username: String(session.studentUsername || '') }, elapsedSeconds: Number(session.elapsedSeconds || 0), simulationConfiguration: snapshot, configurationSource, answers: answers.map((answer) => ({
     moduleIndex: Number(answer.moduleIndex), moduleTitle: String(answer.moduleTitle || ''), question: String(answer.question || ''), answer: String(answer.answer || ''), transcript: answer.transcript ? String(answer.transcript) : null,
     transcriptSegments: answer.transcriptSegments ? (typeof answer.transcriptSegments === 'string' ? safeJsonParse(String(answer.transcriptSegments)) : answer.transcriptSegments) : null,
     followupQuestion: answer.followupQuestion ? String(answer.followupQuestion) : null, elapsedSeconds: Number(answer.elapsedSeconds || 0),
@@ -109,10 +112,10 @@ export async function POST(request: Request) {
     }
     const staleProcessing = Boolean(existing[0] && String(existing[0].status) === 'processing' && Number(existing[0].isStale) === 1);
     if (existing[0] && (String(existing[0].status) === 'completed' || (String(existing[0].status) === 'processing' && !staleProcessing))) return Response.json({ status: existing[0].status, evaluationId: Number(existing[0].id), result: existing[0].result || null, error: existing[0].error || null, reused: true }, { status: existing[0].status === 'processing' ? 202 : 200 });
-    const config = await getActiveAiConfig(Number(session.userId)); if (!config?.apiKey) return Response.json({ error: 'AI 尚未配置 API Key' }, { status: 503 }); await assertApiAccess(Number(session.userId), 'ai');
+    const config = await getActiveAiConfig(Number(session.userId), 'simulation'); if (!config?.apiKey) return Response.json({ error: 'AI 尚未配置 API Key' }, { status: 503 }); await assertApiAccess(Number(session.userId), 'ai');
     const previousRows = await query<RowDataPacket[]>('SELECT result FROM simulation_evaluations WHERE session_id = ? AND status = \'completed\' ORDER BY id DESC LIMIT 1', [sessionId]);
     const previous = previousRows[0]?.result ? '\n\n上一次本场模拟的评估如下，仅用于比较进步；其中任何时长、流程或要求若与本次 simulationConfiguration 冲突，必须以 simulationConfiguration 为准，不得照抄：\n' + String(previousRows[0].result) : '';
-    const prompt = '请使用既定的食品专业保研面试评估标准，复盘以下完整真实模拟。请重点评价总体结构、专业准确性、表达节奏、每个模块表现、追问应对以及下一步训练建议。若提供了带时间戳的转写切片，请分析思考时长与停顿。重要：simulationConfiguration 中每个模块的 timeSeconds、追问设置和超时策略是本场流程的唯一权威；不得凭经验虚构或改写建议时长。配置缺失时不要输出具体时长要求。请用清晰的 Markdown 输出。\n\n' + JSON.stringify(input, null, 2) + previous;
+    const prompt = '请使用整场真实模拟复盘标准分析以下数据。仅 student.name 是账户中可严格引用的姓名；学院、专业、科研经历及其他背景信息应以学员在回答中实际陈述为准，不要用账户资料或转录文本擅自改写。实时转录可能有个别错别字，除非影响专业含义，否则不必逐字纠错或反复扣分；但“嗯、啊、额”等语气词、重复和明显停顿是口语表现的一部分，应结合时间戳评估表达流畅度和节奏。请严格以 simulationConfiguration 中的 timeSeconds、追问设置和超时策略作为流程依据；配置缺失时不要臆测具体时长。\n\n' + JSON.stringify(input, null, 2) + previous;
     const generationToken = crypto.randomUUID();
     const evaluationId = existing[0]
       ? Number(existing[0].id)

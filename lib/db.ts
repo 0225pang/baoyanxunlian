@@ -120,6 +120,7 @@ const schema = [
     system_prompt LONGTEXT NOT NULL,
     active_config_id BIGINT UNSIGNED NULL,
     active_prompt_id BIGINT UNSIGNED NULL,
+    active_simulation_prompt_id BIGINT UNSIGNED NULL,
     auto_transcribe TINYINT(1) NOT NULL DEFAULT 0,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
@@ -474,6 +475,7 @@ async function ensureAiColumns(db: Pool) {
     ['ai_settings', 'system_prompt', 'LONGTEXT NULL'],
     ['ai_settings', 'active_config_id', 'BIGINT UNSIGNED NULL'],
     ['ai_settings', 'active_prompt_id', 'BIGINT UNSIGNED NULL'],
+    ['ai_settings', 'active_simulation_prompt_id', 'BIGINT UNSIGNED NULL'],
     ['ai_settings', 'auto_transcribe', 'TINYINT(1) NOT NULL DEFAULT 0'],
     ['ai_evaluations', 'input_hash', 'CHAR(64) NULL'],
     ['ai_evaluations', 'input_snapshot', 'LONGTEXT NULL'],
@@ -701,6 +703,16 @@ async function initializeDatabase(db: Pool) {
     );
     await db.query('UPDATE ai_settings SET active_prompt_id = ? WHERE id = 1', [promptResult[0].insertId]);
   }
+  // Keep the whole-simulation review instruction independent from the
+  // per-question evaluation instruction. Existing installations retain their
+  // current question prompt and receive a dedicated, editable simulation one.
+  await runOnceMigration(db, 'add_simulation_evaluation_prompt_v1', async () => {
+    const simulationPrompt = await db.query<ResultSetHeader>(
+      'INSERT INTO ai_prompts (name, content) VALUES (?, ?)',
+      ['真实模拟整场复盘', '你是一名资深的食品专业保研面试评估老师，负责复盘一整场真实模拟面试。请基于题目、学员回答、转录文本、追问和本场 simulationConfiguration，客观分析整体结构、专业准确性、表达节奏、各模块表现、追问应对及下一步训练建议。\n\n仅账户姓名可作为严格引用的身份信息；学院、专业、科研经历及其他背景应以学员在回答中实际陈述为准。实时语音转录可能有个别错别字，除非影响专业含义，否则不必逐字纠错或反复扣分；但“嗯、啊、额”等语气词、重复和明显停顿是口语表现的一部分，应结合时间戳评估表达流畅度和节奏。\n\nsimulationConfiguration 中各模块的 timeSeconds、追问设置和超时策略是本场流程的唯一权威；不得凭经验改写建议时长。请使用清晰、具体、可执行的 Markdown 输出，并避免编造未提供的经历或事实。'],
+    );
+    await db.query('UPDATE ai_settings SET active_simulation_prompt_id = ? WHERE id = 1 AND active_simulation_prompt_id IS NULL', [simulationPrompt[0].insertId]);
+  });
   await runOnceMigration(db, 'link_legacy_ai_settings_v1', async () => {
     const activeConfig = (await db.query<RowDataPacket[]>('SELECT id, provider, base_url AS baseUrl, model, api_key AS apiKey FROM ai_model_configs ORDER BY id LIMIT 1'))[0][0];
     const activePrompt = (await db.query<RowDataPacket[]>('SELECT id, content FROM ai_prompts ORDER BY id LIMIT 1'))[0][0];
