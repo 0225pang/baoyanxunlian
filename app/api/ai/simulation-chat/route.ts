@@ -2,6 +2,7 @@ import { apiError, requireUser } from '@/lib/auth';
 import { aiRequestErrorWithFallback, chatCompletionsUrl, extractChatContent, getActiveAiConfig, safeJsonParse, samplingParameters, userFacingAiError } from '@/lib/ai';
 import { execute, query } from '@/lib/db';
 import { assertApiAccess, logApiUsage, readTokenUsage } from '@/lib/usage';
+import { fetchWithAiRequestQueue } from '@/lib/ai-request-queue';
 import type { RowDataPacket } from 'mysql2/promise';
 
 type ChatPayload = { sessionId?: number; message?: string };
@@ -41,7 +42,7 @@ export async function POST(request: Request) {
     const rows = await query<RowDataPacket[]>('SELECT role, content FROM simulation_messages WHERE session_id = ? AND evaluation_id IS NULL ORDER BY id ASC', [sessionId]);
     const history = rows.slice(-30).map((row) => ({ role: String(row.role), content: String(row.content) }));
     await execute('INSERT INTO simulation_messages (session_id, user_id, role, content) VALUES (?, ?, ?, ?)', [sessionId, Number(session.userId), 'user', message]);
-    const response = await fetch(chatCompletionsUrl(config.baseUrl), { method: 'POST', headers: { Authorization: 'Bearer ' + config.apiKey, 'Content-Type': 'application/json', Accept: 'text/event-stream' }, body: JSON.stringify({ model: config.model, ...samplingParameters(config.model, 0.4), stream: true, messages: [
+    const response = await fetchWithAiRequestQueue(chatCompletionsUrl(config.baseUrl), { method: 'POST', headers: { Authorization: 'Bearer ' + config.apiKey, 'Content-Type': 'application/json', Accept: 'text/event-stream' }, body: JSON.stringify({ model: config.model, ...samplingParameters(config.model, 0.4), stream: true, messages: [
       { role: 'system', content: '你是小鱼，一名友好、专业的食品专业保研面试讨论伙伴。请直接回答学员当前的问题，进行自然的追问、解释或表达打磨。不要每次都输出完整评估模板，除非学员明确要求。不要虚构训练记录中没有的事实。' },
       { role: 'system', content: '以下是本次及最近一次同学校流程的模拟题目、回答和转写，仅作为讨论上下文：\n' + JSON.stringify(context) }, ...history, { role: 'user', content: message },
     ] }) });

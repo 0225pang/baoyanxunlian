@@ -3,6 +3,7 @@ import { aiRequestErrorWithFallback, chatCompletionsUrl, extractChatContent, get
 import { execute, query } from '@/lib/db';
 import { assertApiAccess, logApiUsage, readTokenUsage } from '@/lib/usage';
 import { createUserNotification } from '@/lib/notifications';
+import { fetchWithAiRequestQueue } from '@/lib/ai-request-queue';
 import type { RowDataPacket } from 'mysql2/promise';
 
 type Input = { sessionId: number; templateName: string; elapsedSeconds: number; simulationConfiguration: unknown | null; configurationSource: 'session_snapshot' | 'current_template_fallback' | 'unavailable'; answers: unknown[] };
@@ -49,7 +50,15 @@ async function buildInput(session: RowDataPacket): Promise<Input> {
 async function runEvaluation(evaluationId: number, generationToken: string, session: RowDataPacket, input: Input, systemPrompt: string, config: NonNullable<Awaited<ReturnType<typeof getActiveAiConfig>>>, prompt: string) {
   try {
     await execute('INSERT INTO simulation_messages (session_id, user_id, evaluation_id, role, content) VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)', [Number(session.id), Number(session.userId), evaluationId, 'system', systemPrompt, Number(session.id), Number(session.userId), evaluationId, 'user', prompt]);
-    const response = await fetch(chatCompletionsUrl(config.baseUrl), { method: 'POST', headers: { Authorization: 'Bearer ' + config.apiKey, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: config.model, ...samplingParameters(config.model, 0.3), messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }] }) });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 180_000);
+    let response: Response;
+    try {
+      response = await fetchWithAiRequestQueue(chatCompletionsUrl(config.baseUrl), { method: 'POST', signal: controller.signal, headers: { Authorization: 'Bearer ' + config.apiKey, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: config.model, ...samplingParameters(config.model, 0.3), messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }] }) });
+    } catch (error) {
+      if (controller.signal.aborted) throw new Error('AI 复盘生成超时（3 分钟），请稍后重试。');
+      throw error;
+    } finally { clearTimeout(timeout); }
     const raw = await response.text(); const payload = safeJsonParse(raw); if (!response.ok) throw new Error(await aiRequestErrorWithFallback(config, response.status, raw));
     const result = extractChatContent(payload); if (!result) throw new Error('AI 返回内容为空');
     const completed = await execute('UPDATE simulation_evaluations SET status = \'completed\', result = ?, error = NULL, completed_at = CURRENT_TIMESTAMP WHERE id = ? AND generation_token = ? AND status = \'processing\'', [result, evaluationId, generationToken]);
@@ -59,7 +68,7 @@ async function runEvaluation(evaluationId: number, generationToken: string, sess
     await execute('INSERT INTO simulation_messages (session_id, user_id, evaluation_id, role, content) VALUES (?, ?, ?, ?, ?)', [Number(session.id), Number(session.userId), evaluationId, 'assistant', result]);
     const usage = readTokenUsage(payload); await logApiUsage(Number(session.userId), 'ai', { inputTokens: usage.inputTokens || Math.ceil(prompt.length / 2), outputTokens: usage.outputTokens || Math.ceil(result.length / 2), model: config.model });
     await createUserNotification(Number(session.userId), '真实模拟复盘已生成', `“${String(session.templateName || '真实模拟')}”的 AI 复盘已完成，可进入记录查看。`, 'success');
-  } catch (error) { const message = userFacingAiError(error); const failed = await execute('UPDATE simulation_evaluations SET status = \'failed\', error = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ? AND generation_token = ? AND status = \'processing\'', [message.slice(0, 2000), evaluationId, generationToken]).catch(() => undefined); if (failed?.affectedRows) await createUserNotification(Number(session.userId), '真实模拟复盘生成失败', message.slice(0, 300), 'error'); }
+  } catch (error) { console.error('[simulation-evaluation] upstream request failed', { evaluationId, sessionId: Number(session.id), userId: Number(session.userId), model: config.model, baseUrl: config.baseUrl, error: error instanceof Error ? { name: error.name, message: error.message, cause: String(error.cause || '') } : String(error) }); const message = userFacingAiError(error); const failed = await execute('UPDATE simulation_evaluations SET status = \'failed\', error = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ? AND generation_token = ? AND status = \'processing\'', [message.slice(0, 2000), evaluationId, generationToken]).catch(() => undefined); if (failed?.affectedRows) await createUserNotification(Number(session.userId), '真实模拟复盘生成失败', message.slice(0, 300), 'error'); }
 }
 
 export async function GET(request: Request) {

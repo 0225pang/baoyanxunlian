@@ -10,6 +10,7 @@ import {
 } from "@/lib/ai";
 import { assertApiAccess, logApiUsage, readTokenUsage } from "@/lib/usage";
 import { synthesizeConfiguredQuestionVoice } from "@/lib/question-voices";
+import { fetchWithAiRequestQueue } from "@/lib/ai-request-queue";
 import type { RowDataPacket } from "mysql2/promise";
 
 export async function POST(
@@ -63,7 +64,7 @@ export async function POST(
       : [];
     const round = Math.max(1, Number(body.followupRound) || 1);
     const count = Math.min(5, Math.max(round, Number(body.followupCount) || 1));
-    const response = await fetch(chatCompletionsUrl(config.baseUrl), {
+    const response = await fetchWithAiRequestQueue(chatCompletionsUrl(config.baseUrl), {
       method: "POST",
       headers: {
         Authorization: "Bearer " + config.apiKey,

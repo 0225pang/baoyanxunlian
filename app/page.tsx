@@ -904,6 +904,7 @@ export default function Home() {
       {page === "simulation-history" && (
         <SimulationHistory
           onBack={() => setPage("home")}
+          onStartTraining={() => setPage("simulation")}
           initialRecordId={simulationReviewId}
           onInitialRecordOpened={() => setSimulationReviewId(null)}
         />

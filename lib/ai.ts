@@ -19,6 +19,10 @@ export const AI_ACCESS_DISABLED_MESSAGE = '您暂未开通 AI 对话权限，请
 // free-tier-only account.  Never expose their raw payload to students.
 export function userFacingAiError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error || '');
+  if (/\bfetch failed\b|ECONN(?:REFUSED|RESET)|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|network(?:\s+error)?/i.test(message)) {
+    return 'AI 服务连接失败，请稍后重试；如持续出现请联系管理员。';
+  }
+  if (/\bAbortError\b|请求超时|生成超时/i.test(message)) return 'AI 服务响应超时，请稍后重试。';
   if (
     /AllocationQuota\.FreeTierOnly|quota|insufficient[_\s-]?(?:balance|credit|fund)|balance.*(?:insufficient|not enough)|额度(?:不足|用尽|已用完)|余额不足|免费额度.*(?:用尽|耗尽)|no\s+(?:remaining\s+)?(?:credit|quota)/i.test(
       message,

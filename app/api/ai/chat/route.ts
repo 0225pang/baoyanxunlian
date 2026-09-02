@@ -2,6 +2,7 @@ import { apiError, requireUser } from '@/lib/auth';
 import { execute, query } from '@/lib/db';
 import { aiRequestErrorWithFallback, chatCompletionsUrl, extractChatContent, getActiveAiConfig, safeJsonParse, samplingParameters, userFacingAiError } from '@/lib/ai';
 import { assertApiAccess, logApiUsage, readTokenUsage } from '@/lib/usage';
+import { fetchWithAiRequestQueue } from '@/lib/ai-request-queue';
 import type { RowDataPacket } from 'mysql2/promise';
 
 function streamContent(payload: unknown) {
@@ -55,7 +56,7 @@ export async function POST(request: Request) {
       })),
     };
     await execute('INSERT INTO ai_messages (user_id, question_id, role, content) VALUES (?, ?, ?, ?)', [userId, questionId, 'user', message]);
-    const response = await fetch(chatCompletionsUrl(config.baseUrl), {
+    const response = await fetchWithAiRequestQueue(chatCompletionsUrl(config.baseUrl), {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + config.apiKey, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
       body: JSON.stringify({ model: config.model, ...samplingParameters(config.model, 0.35), messages: [

@@ -3,6 +3,7 @@ import { query } from '@/lib/db';
 import { aiRequestErrorWithFallback, chatCompletionsUrl, extractChatContent, getActiveAiConfig, safeJsonParse, samplingParameters } from '@/lib/ai';
 import { assertApiAccess, logApiUsage, readTokenUsage } from '@/lib/usage';
 import { synthesizeConfiguredQuestionVoice } from '@/lib/question-voices';
+import { fetchWithAiRequestQueue } from '@/lib/ai-request-queue';
 import type { RowDataPacket } from 'mysql2/promise';
 
 type DynamicModule = { id?: unknown; kind?: unknown; prompt?: unknown; title?: unknown };
@@ -40,7 +41,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     await assertApiAccess(Number(session.userId), 'ai');
 
     const prompt = String(module.prompt || '').trim() || DEFAULT_PROMPT;
-    const response = await fetch(chatCompletionsUrl(config.baseUrl), {
+    const response = await fetchWithAiRequestQueue(chatCompletionsUrl(config.baseUrl), {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + config.apiKey, 'Content-Type': 'application/json' },
       body: JSON.stringify({
