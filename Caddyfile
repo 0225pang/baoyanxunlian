@@ -33,7 +33,11 @@
     }
     format json
   }
-  # Keep Caddy's default ACME challenge selection. In particular, TLS-ALPN on
-  # public TCP 443 avoids any HTTP reverse-proxy or redirect path conflict.
+  # DNS-01 creates a temporary _acme-challenge TXT record through AliDNS.
+  # It does not depend on the public HTTP/TLS validation path and renews
+  # automatically with the same scoped RAM AccessKey.
+  tls {
+    dns alidns {env.ALIYUN_DNS_ACCESS_KEY_ID} {env.ALIYUN_DNS_ACCESS_KEY_SECRET}
+  }
   import app_proxy
 }

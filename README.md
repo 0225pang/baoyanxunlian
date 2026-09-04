@@ -83,8 +83,8 @@ npm run reset-password -- user 新密码
 ## 阿里云部署
 
 1. 保留 `http://服务器公网IP:18080` 作为 HTTP 临时入口。
-2. 若已为 `baoyan.xiaodaidai.tech` 添加 A 记录并开放安全组的 TCP `80`、`443`，在 `.env` 设置 `SITE_DOMAIN=baoyan.xiaodaidai.tech`。启动后 Caddy 会自动申请并续期 Let's Encrypt HTTPS 证书，使用 `https://baoyan.xiaodaidai.tech` 访问。
-   - 若日志中的 `tls-alpn-01` 验证连接被重置，当前 Caddy 配置会自动改用 HTTP-01 验证；请确保 TCP `80` 没有被其他服务占用或转发。IP:18080 入口由独立的 `caddy-ip` 容器提供，不会干扰正式域名的证书验证。
+2. 若已为 `baoyan.xiaodaidai.tech` 添加 A 记录，在 `.env` 设置 `SITE_DOMAIN=baoyan.xiaodaidai.tech`，并填写具备 `AliyunDNSFullAccess` 权限的 `ALIYUN_DNS_ACCESS_KEY_ID`、`ALIYUN_DNS_ACCESS_KEY_SECRET`。主 Caddy 使用 AliDNS 的 DNS-01 验证自动申请和续期 Let's Encrypt HTTPS 证书，不依赖公网 80/443 的验证回调，使用 `https://baoyan.xiaodaidai.tech` 访问。
+   - IP:18080 入口由独立的 `caddy-ip` 容器提供，不会参与域名证书申请，也不会受 DNS-01 改动影响。
 3. 同时使用 HTTP IP 入口和 HTTPS 域名时，`COOKIE_SECURE` 保持为 `false`，以免 HTTP 登录 Cookie 无法回传；正式仅保留 HTTPS 时可改为 `true`。
 4. 安全组开放 22、18080、80、443 端口，不开放 3306。
 5. 安装 Docker 和 Docker Compose。

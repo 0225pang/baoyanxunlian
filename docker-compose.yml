@@ -22,7 +22,9 @@ services:
       - "3001"
 
   caddy:
-    image: caddy:2.10-alpine
+    build:
+      context: .
+      dockerfile: Dockerfile.caddy
     restart: unless-stopped
     depends_on:
       - app
@@ -33,6 +35,8 @@ services:
       - "443:443/udp"
     environment:
       SITE_DOMAIN: ${SITE_DOMAIN:-baoyan.xiaodaidai.tech}
+      ALIYUN_DNS_ACCESS_KEY_ID: ${ALIYUN_DNS_ACCESS_KEY_ID:-}
+      ALIYUN_DNS_ACCESS_KEY_SECRET: ${ALIYUN_DNS_ACCESS_KEY_SECRET:-}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
