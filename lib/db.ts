@@ -140,6 +140,14 @@ const schema = [
     INDEX idx_user_notifications_user_created (user_id, created_at),
     INDEX idx_user_notifications_user_read (user_id, is_read)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE TABLE IF NOT EXISTS announcements (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    title VARCHAR(180) NOT NULL,
+    content TEXT NOT NULL,
+    created_by BIGINT UNSIGNED NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_announcements_created (created_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS asr_settings (
     id TINYINT UNSIGNED NOT NULL PRIMARY KEY,
     provider VARCHAR(50) NOT NULL DEFAULT 'bailian',
@@ -553,6 +561,14 @@ async function ensureQuestionVoiceColumns(db: Pool) {
     await db.query("UPDATE question_voices SET provider='bailian' WHERE provider IS NULL OR provider='' ");
   }
 }
+async function ensureAnnouncementColumns(db: Pool) {
+  if (!(await hasColumn(db, 'user_notifications', 'announcement_id'))) {
+    await db.query('ALTER TABLE user_notifications ADD COLUMN announcement_id BIGINT UNSIGNED NULL AFTER user_id');
+  }
+  if (!(await hasIndex(db, 'user_notifications', 'idx_user_notifications_announcement_read'))) {
+    await db.query('ALTER TABLE user_notifications ADD INDEX idx_user_notifications_announcement_read (announcement_id, is_read)');
+  }
+}
 async function initializeDatabase(db: Pool) {
   for (const statement of schema) await db.query(statement);
   const userStatus = await columnInfo(db, 'users', 'status');
@@ -571,6 +587,7 @@ async function initializeDatabase(db: Pool) {
   await ensureAiColumns(db);
   await ensureSimulationColumns(db);
   await ensureQuestionVoiceColumns(db);
+  await ensureAnnouncementColumns(db);
   if (!(await hasColumn(db, 'user_settings', 'avoid_repeated'))) {
     await db.query('ALTER TABLE user_settings ADD COLUMN avoid_repeated TINYINT(1) NOT NULL DEFAULT 0');
   }

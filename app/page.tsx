@@ -5732,10 +5732,24 @@ function LegacyUsageManagement() {
   );
 }
 function AnnouncementManagement() {
+  type Announcement = { id: number; title: string; content: string; createdAt: string; recipientCount: number; readCount: number; unreadCount: number };
+  type Recipient = { userId: number; username?: string; displayName?: string; isRead: boolean; readAt?: string | null };
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [message, setMessage] = useState("");
   const [publishing, setPublishing] = useState(false);
+  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [recipientMap, setRecipientMap] = useState<Record<number, Recipient[]>>({});
+  const [loadingRecipients, setLoadingRecipients] = useState<number | null>(null);
+  const load = useCallback(async () => {
+    try {
+      const result = await jsonFetch("/api/announcements");
+      setAnnouncements(result.announcements || []);
+    } catch (error) {
+      setMessage((error as Error).message);
+    }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
   async function publish() {
     if (!title.trim() || !content.trim() || publishing) return;
     setPublishing(true);
@@ -5749,10 +5763,26 @@ function AnnouncementManagement() {
       setTitle("");
       setContent("");
       setMessage(`公告已发布给 ${Number(result.delivered || 0)} 位当前有效学员。`);
+      void load();
     } catch (error) {
       setMessage((error as Error).message);
     } finally {
       setPublishing(false);
+    }
+  }
+  async function toggleRecipients(id: number) {
+    if (recipientMap[id]) {
+      setRecipientMap((items) => { const next = { ...items }; delete next[id]; return next; });
+      return;
+    }
+    setLoadingRecipients(id);
+    try {
+      const result = await jsonFetch(`/api/announcements?id=${id}`);
+      setRecipientMap((items) => ({ ...items, [id]: result.recipients || [] }));
+    } catch (error) {
+      setMessage((error as Error).message);
+    } finally {
+      setLoadingRecipients(null);
     }
   }
   return (
@@ -5765,6 +5795,10 @@ function AnnouncementManagement() {
       <label>公告标题<input value={title} maxLength={180} onChange={(event) => setTitle(event.target.value)} placeholder="例如：系统功能更新说明" /></label>
       <label>公告内容<textarea value={content} maxLength={5000} onChange={(event) => setContent(event.target.value)} placeholder="请输入需要通知全体学员的内容。" /></label>
       <div><button type="button" disabled={publishing || !title.trim() || !content.trim()} onClick={() => void publish()}>{publishing ? "正在发布…" : "发布公告"}</button>{message && <small>{message}</small>}</div>
+      <section className="announcement-history">
+        <h3>已发布公告</h3>
+        {announcements.length ? announcements.map((item) => <article key={item.id}><div><strong>{item.title}</strong><small>{new Date(item.createdAt).toLocaleString("zh-CN")}</small><p>{item.content}</p></div><aside><span>已读 {item.readCount} · 未读 {item.unreadCount}</span><small>共 {item.recipientCount} 人</small><button type="button" onClick={() => void toggleRecipients(item.id)} disabled={loadingRecipients === item.id}>{loadingRecipients === item.id ? "加载中…" : recipientMap[item.id] ? "收起名单" : "查看阅读名单"}</button></aside>{recipientMap[item.id] && <ul>{recipientMap[item.id].map((person) => <li key={person.userId}><span><b>{person.displayName || person.username || `用户 #${person.userId}`}</b><small>{person.username ? `@${person.username}` : ""}</small></span><em className={person.isRead ? "read" : "unread"}>{person.isRead ? `已读${person.readAt ? ` · ${new Date(person.readAt).toLocaleString("zh-CN")}` : ""}` : "未读"}</em></li>)}</ul>}</article>) : <p className="announcement-history-empty">还没有发布过公告。</p>}
+      </section>
     </section>
   );
 }
