@@ -2,6 +2,8 @@ FROM caddy:2.10-builder AS builder
 
 # DNS-01 validation through AliDNS. The runtime image stays the official Caddy
 # image; only this binary gains the small DNS provider module.
+ARG GOPROXY_URL=https://goproxy.cn,direct
+ENV GOPROXY=${GOPROXY_URL}
 RUN xcaddy build --with github.com/caddy-dns/alidns
 
 FROM caddy:2.10-alpine
