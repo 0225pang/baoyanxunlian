@@ -6,3 +6,13 @@
 .announcement-preview-modal{position:fixed;z-index:1500;inset:0;display:grid;place-items:center;padding:18px}
 .announcement-preview-backdrop{position:absolute;inset:0;background:#17332877}
 .announcement-preview-card{position:relative;right:auto;bottom:auto;width:min(420px,calc(100vw - 36px));animation:announcement-enter .22s ease-out}
+.announcement-live-overlay{position:fixed;z-index:1600;inset:0;display:grid;place-items:center;padding:18px}
+.announcement-live-backdrop{position:absolute;inset:0;background:#17332877;backdrop-filter:blur(2px)}
+.announcement-modal-live{position:relative;right:auto;bottom:auto;width:min(420px,calc(100vw - 36px));animation:announcement-enter .22s ease-out}
+.announcement-admin{display:grid!important;grid-template-columns:minmax(0,1fr)!important;width:min(860px,100%)!important;max-width:860px!important;margin:0!important;padding:28px!important;gap:16px!important}
+.announcement-admin>header{display:grid!important;height:auto!important;min-height:0!important;padding:0!important;border:0!important;background:transparent!important;align-items:start!important;justify-content:normal!important;gap:6px!important}
+.announcement-admin>header .eyebrow{margin:0!important}.announcement-admin>header h2{margin:0!important}.announcement-admin>header p:last-child{max-width:760px!important;margin:0!important}
+.announcement-admin>label:not(.announcement-force){display:grid!important;grid-template-columns:minmax(0,1fr)!important;width:100%!important;gap:7px!important}
+.announcement-admin>label:not(.announcement-force)>input,.announcement-admin>label:not(.announcement-force)>textarea{display:block!important;width:100%!important;margin:0!important}
+.announcement-admin>.announcement-actions{display:flex!important;min-height:0!important;height:auto!important;padding:0!important;border:0!important;background:transparent!important;align-items:center!important;justify-content:flex-start!important}
+@media(max-width:650px){.announcement-admin{width:100%!important;padding:20px!important}.announcement-live-overlay{padding:12px}.announcement-modal-live{width:min(420px,calc(100vw - 24px))}}
