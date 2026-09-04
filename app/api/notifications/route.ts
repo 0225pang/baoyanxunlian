@@ -6,11 +6,13 @@ import type { RowDataPacket } from 'mysql2/promise';
 export async function GET() {
   try {
     const user = await requireUser();
-    const notifications = await query<RowDataPacket[]>(`SELECT id, kind, title, content, is_read AS isRead,
-      DATE_FORMAT(created_at, '%Y-%m-%dT%H:%i:%s') AS createdAt
-      FROM user_notifications WHERE user_id = ? ORDER BY id DESC LIMIT 80`, [user.id]);
+    const notifications = await query<RowDataPacket[]>(`SELECT n.id, n.kind, n.title, n.content, n.is_read AS isRead,
+      n.announcement_id AS announcementId, COALESCE(a.force_popup, 0) AS forcePopup,
+      DATE_FORMAT(n.created_at, '%Y-%m-%dT%H:%i:%s') AS createdAt
+      FROM user_notifications n LEFT JOIN announcements a ON a.id = n.announcement_id
+      WHERE n.user_id = ? ORDER BY n.id DESC LIMIT 80`, [user.id]);
     const unreadRows = await query<RowDataPacket[]>('SELECT COUNT(*) AS total FROM user_notifications WHERE user_id = ? AND is_read = 0', [user.id]);
-    return Response.json({ notifications: notifications.map((item) => ({ ...item, id: Number(item.id), isRead: Boolean(item.isRead) })), unreadCount: Number(unreadRows[0]?.total || 0) });
+    return Response.json({ notifications: notifications.map((item) => ({ ...item, id: Number(item.id), announcementId: item.announcementId ? Number(item.announcementId) : null, forcePopup: Boolean(item.forcePopup), isRead: Boolean(item.isRead) })), unreadCount: Number(unreadRows[0]?.total || 0) });
   } catch (error) { return apiError(error); }
 }
 

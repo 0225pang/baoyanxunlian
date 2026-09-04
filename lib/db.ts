@@ -144,6 +144,7 @@ const schema = [
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
     title VARCHAR(180) NOT NULL,
     content TEXT NOT NULL,
+    force_popup TINYINT(1) NOT NULL DEFAULT 1,
     created_by BIGINT UNSIGNED NOT NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_announcements_created (created_at)
@@ -562,6 +563,11 @@ async function ensureQuestionVoiceColumns(db: Pool) {
   }
 }
 async function ensureAnnouncementColumns(db: Pool) {
+  if (!(await hasColumn(db, 'announcements', 'force_popup'))) {
+    // Preserve the original behaviour of already published announcements:
+    // they were all mandatory pop-ups before this setting existed.
+    await db.query('ALTER TABLE announcements ADD COLUMN force_popup TINYINT(1) NOT NULL DEFAULT 1 AFTER content');
+  }
   if (!(await hasColumn(db, 'user_notifications', 'announcement_id'))) {
     await db.query('ALTER TABLE user_notifications ADD COLUMN announcement_id BIGINT UNSIGNED NULL AFTER user_id');
   }

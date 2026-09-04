@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import './announcement.css';
 
 export const metadata: Metadata = {
   title: '小鱼食品保研| 保研面试训练系统',

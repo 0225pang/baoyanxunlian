@@ -5732,10 +5732,13 @@ function LegacyUsageManagement() {
   );
 }
 function AnnouncementManagement() {
-  type Announcement = { id: number; title: string; content: string; createdAt: string; recipientCount: number; readCount: number; unreadCount: number };
+  type Announcement = { id: number; title: string; content: string; createdAt: string; forcePopup: boolean; recipientCount: number; readCount: number; unreadCount: number };
   type Recipient = { userId: number; username?: string; displayName?: string; isRead: boolean; readAt?: string | null };
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
+  const [forcePopup, setForcePopup] = useState(true);
+  const [previewing, setPreviewing] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
   const [message, setMessage] = useState("");
   const [publishing, setPublishing] = useState(false);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
@@ -5758,16 +5761,33 @@ function AnnouncementManagement() {
       const result = await jsonFetch("/api/announcements", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: title.trim(), content: content.trim() }),
+        body: JSON.stringify({ title: title.trim(), content: content.trim(), forcePopup }),
       });
       setTitle("");
       setContent("");
+      setForcePopup(true);
+      setPreviewing(false);
       setMessage(`公告已发布给 ${Number(result.delivered || 0)} 位当前有效学员。`);
       void load();
     } catch (error) {
       setMessage((error as Error).message);
     } finally {
       setPublishing(false);
+    }
+  }
+  async function removeAnnouncement(item: Announcement) {
+    if (deletingId || !window.confirm(`确定删除公告“${item.title}”吗？\n删除后，所有用户的公告历史和未读弹窗都会同步移除。`)) return;
+    setDeletingId(item.id);
+    setMessage("");
+    try {
+      await jsonFetch(`/api/announcements?id=${item.id}`, { method: "DELETE" });
+      setRecipientMap((items) => { const next = { ...items }; delete next[item.id]; return next; });
+      setMessage("公告已删除，用户端的对应历史与弹窗已同步移除。");
+      void load();
+    } catch (error) {
+      setMessage((error as Error).message);
+    } finally {
+      setDeletingId(null);
     }
   }
   async function toggleRecipients(id: number) {
@@ -5790,15 +5810,17 @@ function AnnouncementManagement() {
       <header>
         <p className="eyebrow">— SYSTEM ANNOUNCEMENT</p>
         <h2>发布系统公告</h2>
-        <p>发布后，当前有效学员会看到右下角公告弹窗；学员须手动关闭或点击“我已阅读”后才会标记已读。</p>
+        <p>可先按学员端样式预览。开启强制弹窗后，当前有效学员需关闭或点击“我已阅读”才能标记已读；关闭后仅在铃铛历史中展示。</p>
       </header>
       <label>公告标题<input value={title} maxLength={180} onChange={(event) => setTitle(event.target.value)} placeholder="例如：系统功能更新说明" /></label>
       <label>公告内容<textarea value={content} maxLength={5000} onChange={(event) => setContent(event.target.value)} placeholder="请输入需要通知全体学员的内容。" /></label>
-      <div><button type="button" disabled={publishing || !title.trim() || !content.trim()} onClick={() => void publish()}>{publishing ? "正在发布…" : "发布公告"}</button>{message && <small>{message}</small>}</div>
+      <label className="announcement-force"><input type="checkbox" checked={forcePopup} onChange={(event) => setForcePopup(event.target.checked)} /><span><b>强制弹窗提醒</b><small>用户需手动关闭或点击“我已阅读”；关闭后仅在铃铛历史中显示。</small></span></label>
+      <div className="announcement-actions"><button type="button" className="announcement-preview-button" disabled={!title.trim() || !content.trim()} onClick={() => setPreviewing(true)}>预览学员端</button><button type="button" disabled={publishing || !title.trim() || !content.trim()} onClick={() => void publish()}>{publishing ? "正在发布…" : "发布公告"}</button>{message && <small>{message}</small>}</div>
       <section className="announcement-history">
         <h3>已发布公告</h3>
-        {announcements.length ? announcements.map((item) => <article key={item.id}><div><strong>{item.title}</strong><small>{new Date(item.createdAt).toLocaleString("zh-CN")}</small><p>{item.content}</p></div><aside><span>已读 {item.readCount} · 未读 {item.unreadCount}</span><small>共 {item.recipientCount} 人</small><button type="button" onClick={() => void toggleRecipients(item.id)} disabled={loadingRecipients === item.id}>{loadingRecipients === item.id ? "加载中…" : recipientMap[item.id] ? "收起名单" : "查看阅读名单"}</button></aside>{recipientMap[item.id] && <ul>{recipientMap[item.id].map((person) => <li key={person.userId}><span><b>{person.displayName || person.username || `用户 #${person.userId}`}</b><small>{person.username ? `@${person.username}` : ""}</small></span><em className={person.isRead ? "read" : "unread"}>{person.isRead ? `已读${person.readAt ? ` · ${new Date(person.readAt).toLocaleString("zh-CN")}` : ""}` : "未读"}</em></li>)}</ul>}</article>) : <p className="announcement-history-empty">还没有发布过公告。</p>}
+        {announcements.length ? announcements.map((item) => <article key={item.id}><div><strong>{item.title}</strong><small>{new Date(item.createdAt).toLocaleString("zh-CN")}{item.forcePopup ? " · 强制弹窗" : " · 铃铛历史"}</small><p>{item.content}</p></div><aside><span>已读 {item.readCount} · 未读 {item.unreadCount}</span><small>共 {item.recipientCount} 人</small><button type="button" onClick={() => void toggleRecipients(item.id)} disabled={loadingRecipients === item.id}>{loadingRecipients === item.id ? "加载中…" : recipientMap[item.id] ? "收起名单" : "查看阅读名单"}</button><button type="button" className="announcement-delete-button" onClick={() => void removeAnnouncement(item)} disabled={deletingId === item.id}>{deletingId === item.id ? "删除中…" : "删除公告"}</button></aside>{recipientMap[item.id] && <ul>{recipientMap[item.id].map((person) => <li key={person.userId}><span><b>{person.displayName || person.username || `用户 #${person.userId}`}</b><small>{person.username ? `@${person.username}` : ""}</small></span><em className={person.isRead ? "read" : "unread"}>{person.isRead ? `已读${person.readAt ? ` · ${new Date(person.readAt).toLocaleString("zh-CN")}` : ""}` : "未读"}</em></li>)}</ul>}</article>) : <p className="announcement-history-empty">还没有发布过公告。</p>}
       </section>
+      {previewing && <section className="announcement-preview-modal" role="dialog" aria-modal="true" aria-label="公告预览"><div className="announcement-preview-backdrop" onClick={() => setPreviewing(false)} /><div className="announcement-modal announcement-preview-card"><div className="announcement-modal-mark" aria-hidden="true">公告</div><button className="announcement-modal-close" type="button" aria-label="关闭预览" onClick={() => setPreviewing(false)}>×</button><p className="announcement-modal-kicker">SYSTEM UPDATE · PREVIEW</p><h2>{title.trim()}</h2><p className="announcement-modal-content">{content.trim()}</p><time>刚刚</time><button className="announcement-modal-confirm" type="button" onClick={() => setPreviewing(false)}>{forcePopup ? "我已阅读" : "关闭预览"}</button></div></section>}
     </section>
   );
 }

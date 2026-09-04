@@ -20,7 +20,7 @@ export async function GET(request: Request) {
       return Response.json({ recipients: recipients.map((item) => ({ ...item, userId: Number(item.userId), isRead: Boolean(item.isRead) })) });
     }
     const announcements = await query<RowDataPacket[]>(
-      `SELECT a.id, a.title, a.content, DATE_FORMAT(a.created_at, '%Y-%m-%dT%H:%i:%s') AS createdAt,
+      `SELECT a.id, a.title, a.content, a.force_popup AS forcePopup, DATE_FORMAT(a.created_at, '%Y-%m-%dT%H:%i:%s') AS createdAt,
               COUNT(n.id) AS recipientCount,
               COALESCE(SUM(n.is_read = 1), 0) AS readCount
          FROM announcements a
@@ -29,7 +29,7 @@ export async function GET(request: Request) {
         ORDER BY a.id DESC
         LIMIT 50`,
     );
-    return Response.json({ announcements: announcements.map((item) => ({ ...item, id: Number(item.id), recipientCount: Number(item.recipientCount || 0), readCount: Number(item.readCount || 0), unreadCount: Math.max(0, Number(item.recipientCount || 0) - Number(item.readCount || 0)) })) });
+    return Response.json({ announcements: announcements.map((item) => ({ ...item, id: Number(item.id), forcePopup: Boolean(item.forcePopup), recipientCount: Number(item.recipientCount || 0), readCount: Number(item.readCount || 0), unreadCount: Math.max(0, Number(item.recipientCount || 0) - Number(item.readCount || 0)) })) });
   } catch (error) {
     return apiError(error);
   }
@@ -39,7 +39,7 @@ export async function POST(request: Request) {
   try {
     const user = await requireUser();
     if (user.role !== 'admin') throw new Error('FORBIDDEN');
-    const body = await request.json() as { title?: string; content?: string };
+    const body = await request.json() as { title?: string; content?: string; forcePopup?: boolean };
     const title = String(body.title || '').trim();
     const content = String(body.content || '').trim();
     if (!title) return Response.json({ error: '公告标题不能为空' }, { status: 400 });
@@ -49,8 +49,8 @@ export async function POST(request: Request) {
     }
 
     const announcement = await execute(
-      'INSERT INTO announcements (title, content, created_by) VALUES (?, ?, ?)',
-      [title, content, user.id],
+      'INSERT INTO announcements (title, content, force_popup, created_by) VALUES (?, ?, ?, ?)',
+      [title, content, body.forcePopup === false ? 0 : 1, user.id],
     );
     // One INSERT…SELECT keeps recipient delivery a single database write even
     // when it needs to reach many active users.
@@ -61,6 +61,23 @@ export async function POST(request: Request) {
       [announcement.insertId, title, content],
     );
     return Response.json({ id: Number(announcement.insertId), delivered: Number(result.affectedRows || 0) }, { status: 201 });
+  } catch (error) {
+    return apiError(error);
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const user = await requireUser();
+    if (user.role !== 'admin') throw new Error('FORBIDDEN');
+    const id = Number(new URL(request.url).searchParams.get('id'));
+    if (!Number.isInteger(id) || id <= 0) return Response.json({ error: '公告参数无效' }, { status: 400 });
+    // Remove recipient copies first so a deleted announcement cannot remain in
+    // a learner's notification history or continue to trigger a modal.
+    await execute('DELETE FROM user_notifications WHERE announcement_id = ?', [id]);
+    const result = await execute('DELETE FROM announcements WHERE id = ?', [id]);
+    if (!result.affectedRows) return Response.json({ error: '公告不存在或已删除' }, { status: 404 });
+    return Response.json({ deleted: true });
   } catch (error) {
     return apiError(error);
   }
