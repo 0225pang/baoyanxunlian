@@ -1342,14 +1342,12 @@ function Simulation({
     0,
     Math.floor(Number(current?.timeSeconds) || 0),
   );
-  const warnOvertimeSeconds =
-    moduleTimeoutMode === "warn" && suggestedStepSeconds > 0
-      ? Math.max(0, stepElapsed - suggestedStepSeconds)
-      : 0;
-  const isWarnOvertime =
-    moduleTimeoutMode === "warn" &&
-    suggestedStepSeconds > 0 &&
-    stepElapsed >= suggestedStepSeconds;
+  // The two-minute grace period belongs to the whole simulation, rather than
+  // to an individual module. A "warn" module may continue, but it must never
+  // silently consume an extra two minutes for every single question.
+  const overallOvertimeSeconds =
+    totalSeconds > 0 ? Math.max(0, elapsed - totalSeconds) : 0;
+  const isOverallOvertime = totalSeconds > 0 && elapsed >= totalSeconds;
   const format = (seconds: number) =>
     String(Math.floor(Math.max(0, seconds) / 60)).padStart(2, "0") +
     ":" +
@@ -1358,38 +1356,40 @@ function Simulation({
     if (
       !sessionId ||
       !totalSeconds ||
-      elapsed < totalSeconds ||
+      elapsed < totalSeconds + 120 ||
       finishedRef.current
     )
       return;
     finishedRef.current = true;
-    if (recorder.current?.state === "recording") recorder.current.stop();
-    const timeoutTranscript = liveTranscriptRef.current || answer;
-    const timeoutDrafts =
-      current && (timeoutTranscript.trim() || segmentBlob)
-        ? [
-            ...drafts,
-            {
-              moduleIndex: stepIndex,
-              moduleTitle: followup
-                ? current.title + " · 老师追问"
-                : current.title,
-              questionId: current.questionId,
-              question: followup || current.question || current.prompt || "",
-              answer,
-              transcript: timeoutTranscript,
-              transcriptSegments: liveSegmentsRef.current.length
-                ? [...liveSegmentsRef.current]
-                : undefined,
-              elapsedSeconds: stepElapsed,
-              audio: segmentBlob || undefined,
-              questionAudio: questionAudioBlobs[questionAudioKey()],
-              followupQuestion: followup || undefined,
-            },
-          ]
-        : drafts;
-    setMessage("总时长已到，系统正在自动保存本场模拟。");
-    void finish(timeoutDrafts);
+    setMessage("总时长超时已满 2 分钟，系统正在自动提交本场模拟。");
+    void (async () => {
+      const timeoutAudio = recording ? await stopRecording() : segmentBlob;
+      const timeoutTranscript = liveTranscriptRef.current || answer;
+      const timeoutDrafts =
+        current && (timeoutTranscript.trim() || timeoutAudio)
+          ? [
+              ...drafts,
+              {
+                moduleIndex: stepIndex,
+                moduleTitle: followup
+                  ? current.title + " · 老师追问"
+                  : current.title,
+                questionId: current.questionId,
+                question: followup || current.question || current.prompt || "",
+                answer,
+                transcript: timeoutTranscript,
+                transcriptSegments: liveSegmentsRef.current.length
+                  ? [...liveSegmentsRef.current]
+                  : undefined,
+                elapsedSeconds: stepElapsed,
+                audio: timeoutAudio || undefined,
+                questionAudio: questionAudioBlobs[questionAudioKey()],
+                followupQuestion: followup || undefined,
+              },
+            ]
+          : drafts;
+      await finish(timeoutDrafts);
+    })();
   }, [
     elapsed,
     totalSeconds,
@@ -1401,35 +1401,31 @@ function Simulation({
     stepIndex,
     followup,
     stepStartedAt,
+    recording,
   ]);
   useEffect(() => {
     const suggestedSeconds = Math.floor(Number(current?.timeSeconds));
     if (
       !sessionId ||
       !current ||
-      !["warn", "immediate_advance", "auto_advance"].includes(moduleTimeoutMode) ||
+      !["immediate_advance", "auto_advance"].includes(moduleTimeoutMode) ||
       !Number.isFinite(suggestedSeconds) ||
       suggestedSeconds < 1 ||
-      (moduleTimeoutMode === "warn"
-        ? !stepStartedAt
-        : (!recording || !segmentRecordingStartedAt.current)) ||
+      (!recording || !segmentRecordingStartedAt.current) ||
       finishedRef.current
     )
       return;
-    const answerSeconds =
-      moduleTimeoutMode === "warn"
-        ? stepElapsed
-        : Math.floor(
-            (Date.now() - segmentRecordingStartedAt.current) / 1000,
-          );
+    const answerSeconds = Math.floor(
+      (Date.now() - segmentRecordingStartedAt.current) / 1000,
+    );
     const cutoffSeconds =
       moduleTimeoutMode === "immediate_advance"
         ? suggestedSeconds
         : moduleTimeoutMode === "auto_advance"
           ? Math.ceil(suggestedSeconds * 1.5)
-          : suggestedSeconds + 120;
+          : suggestedSeconds;
     if (answerSeconds < cutoffSeconds) return;
-    const timeoutKey = `${sessionId}:${stepIndex}:${followupRound}:${moduleTimeoutMode === "warn" ? stepStartedAt : segmentRecordingStartedAt.current}`;
+    const timeoutKey = `${sessionId}:${stepIndex}:${followupRound}:${segmentRecordingStartedAt.current}`;
     if (moduleTimeoutRef.current === timeoutKey) return;
     moduleTimeoutRef.current = timeoutKey;
     setMessage(
@@ -1437,7 +1433,7 @@ function Simulation({
         ? "已到本环节建议时长，正在保存并进入下一题。"
         : moduleTimeoutMode === "auto_advance"
           ? "已超过本环节建议时长的 50%，正在保存并进入下一题。"
-          : "本环节已超时 2 分钟，正在保存并进入下一题。",
+          : "正在保存并进入下一题。",
     );
     void (async () => {
       const audio = recording ? await stopRecording() : segmentBlob;
@@ -2216,10 +2212,10 @@ function Simulation({
         <button className="back" onClick={() => void exitSimulation()}>
           退出模拟
         </button>
-        {isWarnOvertime ? (
+        {isOverallOvertime ? (
           <div className="simulation-overtime-clock" role="status" aria-live="polite">
             <span>超时时间</span>
-            <strong>{format(warnOvertimeSeconds)}</strong>
+            <strong>{format(overallOvertimeSeconds)}</strong>
           </div>
         ) : (
           <div>
@@ -2245,7 +2241,7 @@ function Simulation({
                 ? "已到建议时长将自动进入下一题"
                 : moduleTimeoutMode === "auto_advance"
                   ? "超过 50% 后将自动进入下一题"
-                  : "提示您已超时。录音与实时转写仍在继续，最多可超时 2 分钟。"}
+                  : "提示您已超时。录音与实时转写仍在继续；全程总时长超时后，最多可继续 2 分钟。"}
             </small>
           ) : null}
         </div>
