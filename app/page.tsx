@@ -3792,6 +3792,8 @@ function History({
   }
   const totalPages = Math.max(1, Math.ceil(groups.length / pageSize));
   const visibleGroups = groups.slice((page - 1) * pageSize, page * pageSize);
+  const today = new Date().toDateString();
+  const todayAnswerCount = records.filter((item) => new Date(String(item.createdAt).replace(" ", "T")).toDateString() === today).length;
   const selectedGroup = selectedKey
     ? groups.find((group) => group.key === selectedKey) || null
     : null;
@@ -3872,6 +3874,13 @@ function History({
           <strong>
             {records.filter((r) => r.hasAudio).length}
             <small> 条</small>
+          </strong>
+        </div>
+        <div>
+          <span>今日作答</span>
+          <strong>
+            {todayAnswerCount}
+            <small> 次</small>
           </strong>
         </div>
       </div>
