@@ -33,12 +33,7 @@
     }
     format json
   }
-  # Some networks reset the special TLS-ALPN validation handshake. Use the
-  # standard HTTP-01 challenge through public TCP port 80 instead.
-  tls {
-    issuer acme {
-      disable_tlsalpn_challenge
-    }
-  }
+  # Keep Caddy's default ACME challenge selection. In particular, TLS-ALPN on
+  # public TCP 443 avoids any HTTP reverse-proxy or redirect path conflict.
   import app_proxy
 }
