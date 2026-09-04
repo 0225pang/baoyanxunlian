@@ -1,3 +1,9 @@
+{
+  # Temporary TLS handshake diagnostics. This does not change routing,
+  # certificates, or the independent IP:18080 entry.
+  debug
+}
+
 (app_proxy) {
   encode zstd gzip
   # The notification bell polls this endpoint every 15 seconds. It is not an
