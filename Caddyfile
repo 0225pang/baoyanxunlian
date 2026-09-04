@@ -37,7 +37,10 @@
   # It does not depend on the public HTTP/TLS validation path and renews
   # automatically with the same scoped RAM AccessKey.
   tls {
-    dns alidns {env.ALIYUN_DNS_ACCESS_KEY_ID} {env.ALIYUN_DNS_ACCESS_KEY_SECRET}
+    dns alidns {
+      access_key_id {env.ALIYUN_DNS_ACCESS_KEY_ID}
+      access_key_secret {env.ALIYUN_DNS_ACCESS_KEY_SECRET}
+    }
   }
   import app_proxy
 }
