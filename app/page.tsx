@@ -1338,6 +1338,18 @@ function Simulation({
   const moduleTimeoutMode =
     templates.find((item) => item.id === Number(templateId))
       ?.moduleTimeoutMode || "warn";
+  const suggestedStepSeconds = Math.max(
+    0,
+    Math.floor(Number(current?.timeSeconds) || 0),
+  );
+  const warnOvertimeSeconds =
+    moduleTimeoutMode === "warn" && suggestedStepSeconds > 0
+      ? Math.max(0, stepElapsed - suggestedStepSeconds)
+      : 0;
+  const isWarnOvertime =
+    moduleTimeoutMode === "warn" &&
+    suggestedStepSeconds > 0 &&
+    stepElapsed >= suggestedStepSeconds;
   const format = (seconds: number) =>
     String(Math.floor(Math.max(0, seconds) / 60)).padStart(2, "0") +
     ":" +
@@ -1395,32 +1407,40 @@ function Simulation({
     if (
       !sessionId ||
       !current ||
-      !["immediate_advance", "auto_advance"].includes(moduleTimeoutMode) ||
+      !["warn", "immediate_advance", "auto_advance"].includes(moduleTimeoutMode) ||
       !Number.isFinite(suggestedSeconds) ||
       suggestedSeconds < 1 ||
-      !recording ||
-      !segmentRecordingStartedAt.current ||
+      (moduleTimeoutMode === "warn"
+        ? !stepStartedAt
+        : (!recording || !segmentRecordingStartedAt.current)) ||
       finishedRef.current
     )
       return;
-    const answerSeconds = Math.floor(
-      (Date.now() - segmentRecordingStartedAt.current) / 1000,
-    );
+    const answerSeconds =
+      moduleTimeoutMode === "warn"
+        ? stepElapsed
+        : Math.floor(
+            (Date.now() - segmentRecordingStartedAt.current) / 1000,
+          );
     const cutoffSeconds =
       moduleTimeoutMode === "immediate_advance"
         ? suggestedSeconds
-        : Math.ceil(suggestedSeconds * 1.5);
+        : moduleTimeoutMode === "auto_advance"
+          ? Math.ceil(suggestedSeconds * 1.5)
+          : suggestedSeconds + 120;
     if (answerSeconds < cutoffSeconds) return;
-    const timeoutKey = `${sessionId}:${stepIndex}:${followupRound}:${segmentRecordingStartedAt.current}`;
+    const timeoutKey = `${sessionId}:${stepIndex}:${followupRound}:${moduleTimeoutMode === "warn" ? stepStartedAt : segmentRecordingStartedAt.current}`;
     if (moduleTimeoutRef.current === timeoutKey) return;
     moduleTimeoutRef.current = timeoutKey;
     setMessage(
       moduleTimeoutMode === "immediate_advance"
         ? "已到本环节建议时长，正在保存并进入下一题。"
-        : "已超过本环节建议时长的 50%，正在保存并进入下一题。",
+        : moduleTimeoutMode === "auto_advance"
+          ? "已超过本环节建议时长的 50%，正在保存并进入下一题。"
+          : "本环节已超时 2 分钟，正在保存并进入下一题。",
     );
     void (async () => {
-      const audio = await stopRecording();
+      const audio = recording ? await stopRecording() : segmentBlob;
       const transcript = liveTranscriptRef.current || answer;
       const activeQuestion =
         followup || current.question || current.prompt || "";
@@ -1433,6 +1453,9 @@ function Simulation({
               audio,
             )
           : null;
+      // Even an empty answer must close the current capture session before
+      // advancing, otherwise a stale realtime socket can leak into next step.
+      if (!saved) stopRealtimeTranscription(true);
       const nextDrafts = saved ? [...drafts, saved] : drafts;
       setFollowup(null);
       setFollowupRound(0);
@@ -1467,7 +1490,10 @@ function Simulation({
     moduleTimeoutMode,
     recording,
     sessionId,
+    segmentBlob,
     stepIndex,
+    stepElapsed,
+    stepStartedAt,
     steps,
   ]);
   function stopRealtimeTranscription(dispose = false) {
@@ -2190,27 +2216,36 @@ function Simulation({
         <button className="back" onClick={() => void exitSimulation()}>
           退出模拟
         </button>
-        <div>
-          <span>全程倒计时</span>
-          <strong>{format(totalSeconds - elapsed)}</strong>
-        </div>
+        {isWarnOvertime ? (
+          <div className="simulation-overtime-clock" role="status" aria-live="polite">
+            <span>超时时间</span>
+            <strong>{format(warnOvertimeSeconds)}</strong>
+          </div>
+        ) : (
+          <div>
+            <span>全程倒计时</span>
+            <strong>{format(totalSeconds - elapsed)}</strong>
+          </div>
+        )}
         <div>
           <span>本环节建议时长</span>
           <strong
             className={
-              stepElapsed > (current.timeSeconds || 0) ? "overtime" : ""
+              suggestedStepSeconds > 0 && stepElapsed >= suggestedStepSeconds
+                ? "overtime"
+                : ""
             }
           >
             {format(current.timeSeconds || 0)}
           </strong>
           {Number(current.timeSeconds) > 0 &&
-          stepElapsed > Number(current.timeSeconds) ? (
+          stepElapsed >= Number(current.timeSeconds) ? (
             <small className="simulation-overtime-hint">
               {moduleTimeoutMode === "immediate_advance"
                 ? "已到建议时长将自动进入下一题"
                 : moduleTimeoutMode === "auto_advance"
                   ? "超过 50% 后将自动进入下一题"
-                  : "已超出建议时长，仍可继续作答"}
+                  : "提示您已超时。录音与实时转写仍在继续，最多可超时 2 分钟。"}
             </small>
           ) : null}
         </div>
@@ -2271,7 +2306,7 @@ function Simulation({
                   ? "达到本环节建议时长后，会自动保存并进入下一题；全程时间到后结束模拟。"
                   : moduleTimeoutMode === "auto_advance"
                     ? "超出本环节建议时长 50% 后，会自动保存并进入下一题；全程时间到后结束模拟。"
-                    : "本环节超过建议时长只会提醒；全程时间到后应结束模拟。"}
+                    : "本环节超时后会继续录音和实时转写，最多可超时 2 分钟；到时将自动保存并进入下一环节。"}
         </p>
         {dynamicPending && (
           <div className="simulation-generating">
@@ -5696,9 +5731,47 @@ function LegacyUsageManagement() {
     </section>
   );
 }
+function AnnouncementManagement() {
+  const [title, setTitle] = useState("");
+  const [content, setContent] = useState("");
+  const [message, setMessage] = useState("");
+  const [publishing, setPublishing] = useState(false);
+  async function publish() {
+    if (!title.trim() || !content.trim() || publishing) return;
+    setPublishing(true);
+    setMessage("");
+    try {
+      const result = await jsonFetch("/api/announcements", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: title.trim(), content: content.trim() }),
+      });
+      setTitle("");
+      setContent("");
+      setMessage(`公告已发布给 ${Number(result.delivered || 0)} 位当前有效学员。`);
+    } catch (error) {
+      setMessage((error as Error).message);
+    } finally {
+      setPublishing(false);
+    }
+  }
+  return (
+    <section className="announcement-admin">
+      <header>
+        <p className="eyebrow">— SYSTEM ANNOUNCEMENT</p>
+        <h2>发布系统公告</h2>
+        <p>发布后，当前有效学员会看到右下角公告弹窗；学员须手动关闭或点击“我已阅读”后才会标记已读。</p>
+      </header>
+      <label>公告标题<input value={title} maxLength={180} onChange={(event) => setTitle(event.target.value)} placeholder="例如：系统功能更新说明" /></label>
+      <label>公告内容<textarea value={content} maxLength={5000} onChange={(event) => setContent(event.target.value)} placeholder="请输入需要通知全体学员的内容。" /></label>
+      <div><button type="button" disabled={publishing || !title.trim() || !content.trim()} onClick={() => void publish()}>{publishing ? "正在发布…" : "发布公告"}</button>{message && <small>{message}</small>}</div>
+    </section>
+  );
+}
+
 function Management() {
   const [tab, setTab] = useState<
-    "users" | "questions" | "voice" | "ai" | "simulation" | "usage"
+    "users" | "questions" | "voice" | "ai" | "simulation" | "usage" | "announcements"
   >("users");
   return (
     <main className="management-hub">
@@ -5746,6 +5819,12 @@ function Management() {
         >
           用量额度<span>API 权限与消耗</span>
         </button>
+        <button
+          className={tab === "announcements" ? "active" : ""}
+          onClick={() => setTab("announcements")}
+        >
+          系统公告<span>发布用户通知</span>
+        </button>
       </nav>
       <div className="management-hub-content">
         {tab === "users" ? (
@@ -5758,6 +5837,8 @@ function Management() {
           <AiConfig />
         ) : tab === "simulation" ? (
           <SimulationConfig />
+        ) : tab === "announcements" ? (
+          <AnnouncementManagement />
         ) : (
           <UsageManagement />
         )}

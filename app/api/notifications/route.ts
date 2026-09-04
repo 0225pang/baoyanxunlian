@@ -31,8 +31,8 @@ export async function POST(request: Request) {
 
 export async function PATCH(request: Request) {
   try {
-    const user = await requireUser(); const body = await request.json() as { id?: number; all?: boolean };
-    if (body.all) await execute('UPDATE user_notifications SET is_read = 1, read_at = CURRENT_TIMESTAMP WHERE user_id = ? AND is_read = 0', [user.id]);
+    const user = await requireUser(); const body = await request.json() as { id?: number; all?: boolean; excludeAnnouncements?: boolean };
+    if (body.all) await execute(`UPDATE user_notifications SET is_read = 1, read_at = CURRENT_TIMESTAMP WHERE user_id = ? AND is_read = 0${body.excludeAnnouncements ? " AND kind <> 'announcement'" : ''}`, [user.id]);
     else if (Number.isInteger(Number(body.id)) && Number(body.id) > 0) await execute('UPDATE user_notifications SET is_read = 1, read_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?', [Number(body.id), user.id]);
     else return Response.json({ error: '通知参数无效' }, { status: 400 });
     return GET();
