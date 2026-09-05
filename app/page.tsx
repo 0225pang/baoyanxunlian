@@ -221,6 +221,7 @@ export default function Home() {
   const [countdown, setCountdown] = useState<number | null>(null);
   const [answer, setAnswer] = useState("");
   const [records, setRecords] = useState<RecordItem[]>([]);
+  const [recordStats, setRecordStats] = useState({ totalAnswers: 0, todayAnswers: 0 });
   const [autoRecord, setAutoRecord] = useState(true);
   const [autoTranscribe, setAutoTranscribe] = useState(false);
   const [avoidRepeated, setAvoidRepeated] = useState(false);
@@ -329,6 +330,7 @@ export default function Home() {
         `/api/records?category=${encodeURIComponent(category)}&q=${encodeURIComponent(search)}`,
       );
       setRecords(data.records);
+      setRecordStats({ totalAnswers: Number(data.stats?.totalAnswers || 0), todayAnswers: Number(data.stats?.todayAnswers || 0) });
       return data.records as RecordItem[];
     },
     [],
@@ -913,6 +915,7 @@ export default function Home() {
       {page === "history" && (
         <History
           records={records}
+          stats={recordStats}
           cards={homeCards}
           autoTranscribe={autoTranscribe}
           onFilter={loadRecords}
@@ -3748,6 +3751,7 @@ function Login({
 
 function History({
   records,
+  stats,
   cards,
   autoTranscribe,
   onFilter,
@@ -3756,6 +3760,7 @@ function History({
   onReview,
 }: {
   records: RecordItem[];
+  stats: { totalAnswers: number; todayAnswers: number };
   cards: HomeCard[];
   autoTranscribe: boolean;
   onFilter: (category?: string, search?: string) => Promise<unknown>;
@@ -3792,8 +3797,6 @@ function History({
   }
   const totalPages = Math.max(1, Math.ceil(groups.length / pageSize));
   const visibleGroups = groups.slice((page - 1) * pageSize, page * pageSize);
-  const today = new Date().toDateString();
-  const todayAnswerCount = records.filter((item) => new Date(String(item.createdAt).replace(" ", "T")).toDateString() === today).length;
   const selectedGroup = selectedKey
     ? groups.find((group) => group.key === selectedKey) || null
     : null;
@@ -3865,7 +3868,7 @@ function History({
         <div>
           <span>累计作答</span>
           <strong>
-            {records.length}
+            {stats.totalAnswers}
             <small> 次</small>
           </strong>
         </div>
@@ -3879,7 +3882,7 @@ function History({
         <div>
           <span>今日作答</span>
           <strong>
-            {todayAnswerCount}
+            {stats.todayAnswers}
             <small> 次</small>
           </strong>
         </div>

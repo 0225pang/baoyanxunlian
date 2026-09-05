@@ -1,5 +1,15 @@
 import { apiError, requireUser } from '@/lib/auth';
 import { execute, query } from '@/lib/db';
+import type { RowDataPacket } from 'mysql2/promise';
+
+function beijingDayBounds(now = new Date()) {
+  const fields = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(now);
+  const value = (type: string) => fields.find((item) => item.type === type)?.value || '';
+  const year = Number(value('year')); const month = Number(value('month')); const day = Number(value('day'));
+  const next = new Date(Date.UTC(year, month - 1, day + 1));
+  const nextDate = `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, '0')}-${String(next.getUTCDate()).padStart(2, '0')}`;
+  return { start: `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')} 00:00:00`, end: `${nextDate} 00:00:00` };
+}
 
 export async function GET(request: Request) {
   try {
@@ -25,7 +35,11 @@ export async function GET(request: Request) {
         AND (? = '' OR r.category = ?)
         AND (? = '' OR r.question LIKE ? OR r.answer LIKE ?)
       ORDER BY r.created_at DESC, r.id DESC`, values);
-    return Response.json({ records });
+    const day = beijingDayBounds();
+    const statsValues: unknown[] = [day.start, day.end];
+    if (user.role !== 'admin') statsValues.push(user.id);
+    const statsRows = await query<RowDataPacket[]>(`SELECT COUNT(*) AS totalAnswers, COALESCE(SUM(r.created_at >= ? AND r.created_at < ?), 0) AS todayAnswers FROM practice_records r WHERE 1 = 1 ${ownerFilter}`, statsValues);
+    return Response.json({ records, stats: { totalAnswers: Number(statsRows[0]?.totalAnswers || 0), todayAnswers: Number(statsRows[0]?.todayAnswers || 0) } });
   } catch (error) { return apiError(error); }
 }
 
