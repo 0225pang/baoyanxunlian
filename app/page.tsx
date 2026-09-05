@@ -5171,9 +5171,9 @@ function ReviewPage({
                   <span className="section-kicker">RECENT ATTEMPTS</span>
                   <h2>最近的回答</h2>
                 </div>
-                <small>按时间倒序，最多取 3 次</small>
+                <small>按时间倒序，共 {group.attempts.length} 次</small>
               </div>
-              {group.attempts.slice(0, 3).map((item, index) => {
+              {group.attempts.map((item, index) => {
                 return (
                   <article className="review-attempt" key={item.id}>
                     <div className="review-attempt-head">
